@@ -436,7 +436,6 @@ function parseArguments() {
                 exit 0
                 ;;
             init)
-                checkDir
                 if [[ -z $(find "$PROJECT_DIR" -mindepth 1 -print -quit) ]]; then
                     _init
                     exit 0
