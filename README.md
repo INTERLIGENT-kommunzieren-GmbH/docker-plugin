@@ -20,6 +20,13 @@ To use the plugin, invoke `docker control <command>`.
 
 ### Available Commands
 
+#### `add-deploy-config`
+Add deployment configuration for environments.
+
+```bash
+docker control add-deploy-config
+```
+
 #### `build`
 Build the Docker containers for the project.
 
@@ -27,11 +34,32 @@ Build the Docker containers for the project.
 docker control build
 ```
 
+#### `cap <env>`
+Deploy via capistrano to the specified environment.
+
+```bash
+docker control cap production
+```
+
 #### `console <container>`
 Open a bash shell inside a container. Defaults to the `php` container if no container name is provided.
 
 ```bash
 docker control console php
+```
+
+#### `create-control-script <name>`
+Create a custom control script with the specified name.
+
+```bash
+docker control create-control-script my-command
+```
+
+#### `deploy <env> <branch>`
+Deploy the specified branch to the specified environment.
+
+```bash
+docker control deploy production main
 ```
 
 #### `help`
@@ -46,6 +74,13 @@ Initialize an empty directory with the project template, creating a `.env` file 
 
 ```bash
 docker control init
+```
+
+#### `merge`
+Automatic branch merging between environments.
+
+```bash
+docker control merge
 ```
 
 #### `pull`
@@ -119,7 +154,7 @@ docker control stop-ingress
 ```
 
 #### `update`
-Currently not implemented.
+Update the project with the current template, creating a backup of the existing files.
 
 ```bash
 docker control update
@@ -133,3 +168,28 @@ docker control version
 ```
 
 ### Custom Commands
+
+The plugin supports custom commands that can be created using the `create-control-script` command. These commands are stored in the `control-scripts` directory of your project and can be executed using `docker control <command-name>`.
+
+Custom commands will appear in the help output with their descriptions. To set a description for your custom command, modify the echo statement in the `_desc_` section of your script.
+
+Example of a custom command script:
+
+```bash
+#!/bin/bash
+set -e
+
+. "$LIB_DIR/util-functions.sh"
+
+if [[ "$1" == "_desc_" ]]; then
+    # output command description
+    echo "My custom command description"
+
+    exit 0
+fi
+
+# Your command implementation here
+info "Custom command executed"
+
+exit 0
+```
