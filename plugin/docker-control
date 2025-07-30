@@ -1,0 +1,32 @@
+#!/bin/bash
+
+VERSION="1.0.0-beta"
+
+REAL_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$REAL_PATH")"
+INGRESS_COMPOSE_DIR=$(realpath "$SCRIPT_DIR/../ingress")
+# shellcheck disable=SC2034
+INGRESS_COMPOSE_FILE="$INGRESS_COMPOSE_DIR/compose.yml"
+LIB_DIR=$(realpath "$SCRIPT_DIR/../lib")
+# shellcheck disable=SC2034
+TEMPLATE_DIR=$(realpath "$SCRIPT_DIR/../template")
+# shellcheck disable=SC2034
+PROJECT_DIR=$(pwd)
+# shellcheck disable=SC2034
+DIR=$(realpath "$SCRIPT_DIR/..")
+
+. "$LIB_DIR/deploy-functions.sh"
+. "$LIB_DIR/util-functions.sh"
+. "$LIB_DIR/plugin-functions.sh"
+
+trap ctrl_c INT
+
+ctrl_c () {
+    critical "Terminated by Ctrl + C"
+    exit 1
+}
+
+initializePlugin "$1" "$VERSION"
+parseArguments "$@"
+
+

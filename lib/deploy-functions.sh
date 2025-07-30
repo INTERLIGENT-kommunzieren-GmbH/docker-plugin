@@ -1,0 +1,180 @@
+#!/bin/bash
+
+function copySSH() {
+    local USER="$1"
+    local DOMAIN="$2"
+    scp -o StrictHostKeyChecking=no "$3" "$USER@$DOMAIN":"$4" 2>&1
+    return $?
+}
+
+function execSSH() {
+    local USER="$1"
+    local DOMAIN="$2"
+    local COMMAND="$3"
+    ssh -o LogLevel=QUIET -o StrictHostKeyChecking=accept-new -tA "$USER"@"$DOMAIN" -- "$COMMAND"
+    return $?
+}
+
+function createDeploymentZip() {
+    local BRANCH="$1"
+    local DEPLOYMENT
+    DEPLOYMENT=$(date +"%Y%m%d%H%M%S")
+
+    if [[ -z "$BRANCH" ]]; then
+        BRANCH=$(input -n -p "branch")
+    fi
+
+    mkdir "$PROJECT_DIR/deployments/$DEPLOYMENT"
+
+    # create worktree
+    git -C "$PROJECT_DIR"/htdocs worktree add --detach "$PROJECT_DIR/deployments/$DEPLOYMENT" "$BRANCH"
+
+    . "$PROJECT_DIR"/.env
+    docker run -u www-data -v "$PROJECT_DIR/deployments/$DEPLOYMENT":/var/www/html fduarte42/docker-php:"$PHP_VERSION" composer i -o
+
+    # todo: add optional encoding
+
+    cd "$PROJECT_DIR/deployments/$DEPLOYMENT" || fatal "could not change directory into $PROJECT_DIR/deployments/$DEPLOYMENT"
+    7z a "$PROJECT_DIR/deployments/$DEPLOYMENT.7z" ./*
+    cd "$PROJECT_DIR" || fatal "could not change directory into $PROJECT_DIR"
+
+    # remove worktree
+    git -C "$PROJECT_DIR"/htdocs worktree remove "$PROJECT_DIR"/deployments/"$DEPLOYMENT" --force
+
+    echo "$PROJECT_DIR/deployments/$DEPLOYMENT.7z"
+}
+
+function createDeploymentHooks() {
+    local ENV="$1"
+
+    if [[ -f "$PROJECT_DIR/deployments/scripts/$ENV.sh" ]]; then
+        critical "deployment hook for $ENV already created at $PROJECT_DIR/deployments/scripts/$ENV.sh"
+        exit 1
+    fi
+
+    cat << EOF | tee "$PROJECT_DIR/deployments/scripts/${ENV}.sh" 1>/dev/null
+#!/bin/bash
+set -e
+
+. "$LIB_DIR/util-functions.sh"
+
+if [[ "\$1" == "_desc_" ]]; then
+    # output command description
+    echo "EMPTY DESCRIPTION"
+
+    exit 0
+fi
+
+info "WAITING FOR IMPLEMENTATION"
+
+exit 0
+EOF
+
+}
+
+function deploy() {
+    local ENV="$1"
+    local USER="$2"
+    local DOMAIN="$3"
+    local SERVER_ROOT="${4:-/var/www/html}"
+    local BRANCH="$5"
+
+    local DEPLOYMENT
+    DEPLOYMENT=$(createDeploymentZip "$BRANCH")
+    local DEPLOYMENT_FILENAME
+    DEPLOYMENT_FILENAME=$(basename "$DEPLOYMENT")
+    local DEPLOYMENT_DIRECTORY
+    DEPLOYMENT_DIRECTORY=$(basename "$DEPLOYMENT" .7z)
+
+    # todo: include custom env deploy functions
+
+    # copy deployment file to server
+    copySSH "$USER" "$DOMAIN" "$DEPLOYMENT" "$SERVER_ROOT/releases/$DEPLOYMENT_FILENAME"
+
+    # extract deployment file and remove it
+    execSSH "$USER" "$DOMAIN" "mkdir $SERVER_ROOT/releases/$DEPLOYMENT_DIRECTORY"
+    execSSH "$USER" "$DOMAIN" "7z x -o$SERVER_ROOT/releases/$DEPLOYMENT_DIRECTORY $SERVER_ROOT/releases/$DEPLOYMENT_FILENAME"
+    execSSH "$USER" "$DOMAIN" "rm -f $SERVER_ROOT/releases/$DEPLOYMENT_FILENAME"
+
+    # remove old deployments
+    execSSH "$USER" "$DOMAIN" "bash -c 'ls -d1t $SERVER_ROOT/releases/* | grep -v \$(readlink -f $SERVER_ROOT/current) | egrep \"^$SERVER_ROOT/releases/[0-9]{14}_.+\$\" | tail -n +6 | xargs rm -rf'"
+
+    if [[ "$(confirm -n "Unpacking finished, continue?")" == "n" ]]; then
+        critical "deployment canceled"
+        exit 1
+    fi
+
+    info "Reloading FPM"
+    execSSH "$USER" "$DOMAIN" "sudo php-fpm-reload.sh"
+
+
+    # register deployment consoles
+    local CONSOLE_PATH_CURRENT="php $SERVER_ROOT/current/public/index.php"
+    local CONSOLE_PATH_NEW_RELEASE="php $SERVER_ROOT/releases/$DEPLOYMENT_DIRECTORY/public/index.php"
+
+    local MAINTENANCE_MODE
+    MAINTENANCE_MODE=$(select_maintenance_mode)
+
+    info "Enabling maintenance"
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_CURRENT shared:maintenance $MAINTENANCE_MODE"
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE shared:maintenance $MAINTENANCE_MODE"
+
+    if [[ $(type -t "pre_deploy_$ENV") == "function" ]]; then
+        "pre_deploy_$ENV" "$USER" "$DOMAIN" "$SERVER_ROOT" "$DEPLOYMENT_DIRECTORY" "$CONSOLE_PATH_NEW_RELEASE"
+    fi
+
+    info "Clearing caches"
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE shared:clear-opcc"
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE orm:clear-cache:metadata"
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE orm:clear-cache:query"
+
+    if [[ "$(confirm "Clear result cache?")" == "y" ]]; then
+        execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE orm:clear-cache:result"
+    fi
+
+    if [[ "$(confirm "Execute migrations?")" == "y" ]]; then
+        execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE migrations:migrate"
+    fi
+
+    if [[ $(type -t "post_deploy_$ENV") == "function" ]]; then
+        "post_deploy_$ENV" "$USER" "$DOMAIN" "$SERVER_ROOT" "$DEPLOYMENT_DIRECTORY" "$CONSOLE_PATH_NEW_RELEASE"
+    fi
+
+    info "Basic Deployment done, run any custom commands now"
+    wait_for_keypress
+
+    # disabling maintenance
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE shared:maintenance off"
+
+    # updating current symlink
+    execSSH "$USER" "$DOMAIN" "rm $SERVER_ROOT/current"
+    execSSH "$USER" "$DOMAIN" "ln -s releases/$DEPLOYMENT_DIRECTORY /var/www/html/current"
+
+    # final bytecode cache clear
+    execSSH "$USER" "$DOMAIN" "$CONSOLE_PATH_NEW_RELEASE shared:clear-opcc"
+
+    info "Deployment done"
+
+}
+
+function select_maintenance_mode() {
+    local SERVER
+    local MAINTENANCE_MODE_MAP
+    # shellcheck disable=SC2034
+    declare -A MAINTENANCE_MODE_MAP=()
+    local MAINTENANCE_MODE_ORDER
+    # shellcheck disable=SC2034
+    declare -a MAINTENANCE_MODE_ORDER=()
+    for MODE in "hard" "soft"
+    do
+        # shellcheck disable=SC2034
+        MAINTENANCE_MODE_MAP[$SERVER]="$MODE"
+        MAINTENANCE_MODE_ORDER+=("$MODE")
+    done
+
+    choose_multiple "maintenance mode:" MAINTENANCE_MODE_MAP MAINTENANCE_MODE_ORDER
+}
+
+
+
+

@@ -1,0 +1,35 @@
+services:
+  nginx:
+    container_name: nginx-proxy
+    image: nginxproxy/nginx-proxy:1.6
+    networks:
+      - "frontend-tier"
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: always
+    volumes:
+      - "/var/run/docker.sock:/tmp/docker.sock:ro"
+      - "./volumes/vhosts.d:/etc/nginx/vhost.d:ro"
+      - "./volumes/tls:/etc/nginx/certs:ro"
+    logging:
+      options:
+        max-size: "100M"
+        max-file: "4"
+
+  proxy-companion:
+    container_name: proxy-companion
+    image: sebastienheyd/self-signed-proxy-companion
+    environment:
+      NGINX_PROXY_CONTAINER: nginx-proxy
+    networks:
+      - "frontend-tier"
+    restart: always
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./volumes/tls:/etc/nginx/certs:rw"
+
+networks:
+  frontend-tier:
+    name: proxy
+
