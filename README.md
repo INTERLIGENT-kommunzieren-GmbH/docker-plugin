@@ -9,7 +9,7 @@ To install the plugin, simply run the `install.sh` script, which will automatica
 ### Example:
 
 ```bash
-curl -sL --header  "https://github.com/INTERLIGENT-kommunzieren-GmbH/docker-plugin/-/raw/main/install.sh" | bash
+curl -sL https://raw.githubusercontent.com/INTERLIGENT-kommunzieren-GmbH/docker-plugin/main/install.sh | bash
 ```
 
 This will install the plugin into `~/.ik-docker`, making it accessible with the `docker control` command.
@@ -133,32 +133,3 @@ docker control version
 ```
 
 ### Custom Commands
-
-If you have custom scripts in the `scripts/` directory of your project, you can run them by calling `docker control <custom-command>`, where `<custom-command>` is the name of the script (without the `.sh` extension).
-
-```bash
-docker control my-custom-command
-```
-
-## Configuration
-
-- **Project Directory (`-d|--dir`)**  
-  You can specify the project directory with the `--dir` or `-d` option. By default, it uses the current directory.
-
-```bash
-docker control --dir /path/to/project
-```
-
-## Metadata
-
-For Docker CLI plugin metadata:
-
-```bash
-docker control docker-cli-plugin-metadata
-```
-
-This will display metadata information for the plugin.
-
-## License
-
-See the [LICENSE](LICENSE) file for details.
