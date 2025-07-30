@@ -145,6 +145,7 @@ function _help() {
     info "  $(printf "%-25s\n" "add-deploy-config") Add deployment config"
     info "  $(printf "%-25s\n" "build") Build containers"
     info "  $(printf "%-25s\n" "cap <env>") Deploy via capistrano to environment"
+    info "  $(printf "%-25s\n" "create-control-script <name>") Create a custom control script
     info "  $(printf "%-25s\n" "console <container>") Enter container console (defaults to php)"
     info "  $(printf "%-25s\n" "deploy <env> <branch>") Deploy branch to environment"
     info "  $(printf "%-25s\n" "merge") Automatic branch merging"
