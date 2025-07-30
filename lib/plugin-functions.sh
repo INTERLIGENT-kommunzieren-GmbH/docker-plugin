@@ -8,6 +8,13 @@ function _addDeployConfig() {
     fi
 }
 
+function checkDir() {
+    if [[ ! -f "$PROJECT_DIR"/.managed-by-docker-control-plugin ]]; then
+        critical "$PROJECT_DIR not managed by docker control plugin"
+        exit 1
+    fi
+}
+
 function _cap() {
     # shellcheck disable=SC2124
     local PARAMETER="$@"
@@ -247,11 +254,6 @@ function initializePlugin() {
 EOF
       exit 0
     fi
-
-    if [[ ! -f "$PROJECT_DIR"/.managed-by-docker-control-plugin ]]; then
-        critical "$PROJECT_DIR not managed by docker control plugin"
-        exit 1
-    fi
 }
 
 function merge() {
@@ -389,34 +391,41 @@ function parseArguments() {
                 shift 2
                 ;;
             add-deploy-config)
+                checkDir
                 _addDeployConfig
                 exit 0
                 ;;
             build)
+                checkDir
                 shift
                 dockerCompose build "$@"
                 exit 0
                 ;;
             create-control-script)
+                checkDir
                 shift
                 _createControlScript "$@"
                 exit 0
                 ;;
             cap)
+                checkDir
                 shift
                 _cap "$@"
                 exit 0
                 ;;
             console)
+                checkDir
                 _console "${2:-php}"
                 exit 0
                 ;;
             deploy)
+                checkDir
                 shift
                 _deploy "$@"
                 exit 0
                 ;;
             merge)
+                checkDir
                 shift
                 _merge "$@"
                 exit 0
@@ -426,6 +435,7 @@ function parseArguments() {
                 exit 0
                 ;;
             init)
+                checkDir
                 if [[ -z $(find "$PROJECT_DIR" -mindepth 1 -print -quit) ]]; then
                     _init
                     exit 0
@@ -435,57 +445,70 @@ function parseArguments() {
                 fi
                 ;;
             pull)
+                checkDir
                 dockerCompose pull
                 exit 0
                 ;;
             pull-ingress)
+                checkDir
                 dockerComposeIngress pull
                 exit 0
                 ;;
             restart)
+                checkDir
                 dockerCompose down
                 dockerCompose up -d
                 exit 0
                 ;;
             restart-ingress)
+                checkDir
                 dockerComposeIngress down
                 dockerComposeIngress up -d
                 exit 0
                 ;;
             start)
+                checkDir
                 dockerCompose up -d
                 exit 0
                 ;;
             start-ingress)
+                checkDir
                 dockerComposeIngress up -d
                 exit 0
                 ;;
             status)
+                checkDir
                 dockerCompose ps
                 exit 0
                 ;;
             status-ingress)
+                checkDir
                 dockerComposeIngress ps
                 exit 0
                 ;;
             stop)
+                checkDir
                 dockerCompose down
                 exit 0
                 ;;
             stop-ingress)
+                checkDir
                 dockerComposeIngress down
                 exit 0
                 ;;
             update)
+                checkDir
                 _update
                 exit 0
                 ;;
             version)
+                checkDir
                 headline "IK Docker Control $SERVICE"
                 info "Version: $SERVICE"
                 exit 0
                 ;;
             *)
+                checkDir
                 COMMAND=$1
                 shift
                 if [[ -f "${PROJECT_DIR}/control-scripts/${COMMAND}.sh" ]]; then
