@@ -71,7 +71,7 @@ function _deploy() {
     fi
 
     local ENV="$1"
-    if [[ ! -v DEPLOY_ENVS[$ENV] ]]; then
+    if [[ -z "${DEPLOY_ENVS[$ENV]+set}" ]]; then
         critical "Environment $ENV not configured"
         exit 1
     fi
