@@ -180,7 +180,7 @@ function _help() {
 
 function _init() {
     info "Creating project template"
-    cp -r "$TEMPLATE_DIR"/* "$PROJECT_DIR/"
+    cp -r "$TEMPLATE_DIR"/. "$PROJECT_DIR/"
     mv "$PROJECT_DIR/.gitignore-dist" "$PROJECT_DIR/.gitignore"
     mkdir "$PROJECT_DIR/htdocs"
 
