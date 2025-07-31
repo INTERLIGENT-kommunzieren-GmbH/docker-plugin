@@ -78,8 +78,17 @@ function _deploy() {
     fi
 
     local ENV="$1"
+    if [[ -z "$ENV" ]]; then
+        critical "Environment parameter missing"
+        newline
+        text 'The following environments are configured: {{ Foreground "14" "'"${!DEPLOY_ENVS[*]}"'"}}'
+        exit 1
+    fi
+
     if [[ -z "${DEPLOY_ENVS[$ENV]+set}" ]]; then
         critical "Environment $ENV not configured"
+        newline
+        text 'The following environments are configured: {{ Foreground "14" "'"${!DEPLOY_ENVS[*]}"'"}}'
         exit 1
     fi
 
