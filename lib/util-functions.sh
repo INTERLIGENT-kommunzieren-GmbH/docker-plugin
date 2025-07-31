@@ -4,7 +4,6 @@
 DEFAULT_IFS=$IFS
 
 function _initUtils() {
-    local GUM_EXECUTABLE
     GUM_EXECUTABLE=$(which gum)
 
     if [[ -z "$GUM_EXECUTABLE" ]]; then
