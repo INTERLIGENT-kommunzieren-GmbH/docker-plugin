@@ -19,6 +19,8 @@ DIR=$(realpath "$SCRIPT_DIR/..")
 . "$LIB_DIR/util-functions.sh"
 . "$LIB_DIR/plugin-functions.sh"
 
+_initUtils
+
 trap ctrl_c INT
 
 ctrl_c () {

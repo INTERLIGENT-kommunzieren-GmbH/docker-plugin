@@ -3,6 +3,16 @@
 # shellcheck disable=SC2034
 DEFAULT_IFS=$IFS
 
+function _initUtils() {
+    local GUM_EXECUTABLE
+    GUM_EXECUTABLE=$(which gum)
+
+    if [[ -z "$GUM_EXECUTABLE" ]]; then
+        warning "Gum executable not found in PATH, using build in version."
+        GUM_EXECUTABLE="$DIR/bin/gum"
+    fi
+}
+
 function choose() {
     local HEADER
     local OPTION
@@ -16,7 +26,7 @@ function choose() {
         HEIGHT=22
     fi
 
-    OPTION=$("$DIR/bin/gum" choose --header="$HEADER" --height="$HEIGHT" "${_OPTIONS_ORDER[@]}")
+    OPTION=$("$GUM_EXECUTABLE" choose --header="$HEADER" --height="$HEIGHT" "${_OPTIONS_ORDER[@]}")
 
     if [ "${_OPTIONS_MAP[$OPTION]}" == 255 ]; then
         return 255
@@ -38,7 +48,7 @@ function choose_multiple() {
         HEIGHT=22
     fi
 
-    OPTIONS=$("$DIR/bin/gum" choose --no-limit --header="$HEADER" --height="$HEIGHT" "${_OPTIONS_ORDER[@]}")
+    OPTIONS=$("$GUM_EXECUTABLE" choose --no-limit --header="$HEADER" --height="$HEIGHT" "${_OPTIONS_ORDER[@]}")
 
     if [ "$OPTIONS" == "" ]; then
       return 255
@@ -66,7 +76,7 @@ function confirm() {
         esac
     done
 
-    if "$DIR/bin/gum" confirm "${QUESTION}" --default="$DEFAULT"; then
+    if "$GUM_EXECUTABLE" confirm "${QUESTION}" --default="$DEFAULT"; then
         RESULT="y"
     else
         RESULT="n"
@@ -75,7 +85,7 @@ function confirm() {
 }
 
 function wait_for_keypress() {
-    "$DIR/bin/gum" input --placeholder "Press Enter to continue..." --prompt "" --no-show-help
+    "$GUM_EXECUTABLE" input --placeholder "Press Enter to continue..." --prompt "" --no-show-help
 }
 
 function critical() {
@@ -95,7 +105,7 @@ function headline() {
     local MESSAGE
     MESSAGE=$(text "$1")
 
-    "$DIR/bin/gum" style --foreground="0" --background="2" --border=double --border-background="2" --padding="1 2" --width=78 --align="center" "$MESSAGE"
+    "$GUM_EXECUTABLE" style --foreground="0" --background="2" --border=double --border-background="2" --padding="1 2" --width=78 --align="center" "$MESSAGE"
 
     return 0
 }
@@ -147,7 +157,7 @@ function input() {
 
     OUTPUT=""
     while [ -z "$OUTPUT" ]; do
-        OUTPUT=$("$DIR/bin/gum" input --header.foreground="12" --header="$HEADER" --placeholder="$PLACEHOLDER")
+        OUTPUT=$("$GUM_EXECUTABLE" input --header.foreground="12" --header="$HEADER" --placeholder="$PLACEHOLDER")
         if [ -z "$OUTPUT" ] && [ -n "$DEFAULT_VALUE" ]; then
             OUTPUT="$DEFAULT_VALUE"
         fi
@@ -190,7 +200,7 @@ function prompt() {
 function select_file() {
     local FILES_DIR="$1"
 
-    sudo "$DIR/bin/gum" file --height 5 "$FILES_DIR"
+    sudo "$GUM_EXECUTABLE" file --height 5 "$FILES_DIR"
 }
 
 function sub_headline() {
@@ -198,7 +208,7 @@ function sub_headline() {
     MESSAGE=$(text "$1")
 
     newline
-    "$DIR/bin/gum" style --foreground="0" --background="5" --italic --width=80 --align="center" "$MESSAGE"
+    "$GUM_EXECUTABLE" style --foreground="0" --background="5" --italic --width=80 --align="center" "$MESSAGE"
 }
 
 function text() {
@@ -241,7 +251,7 @@ function text() {
     done
     MESSAGE=$(echo -e "${MESSAGE}" | sed -e 's/^[[:space:]]*//') # trim spaces
 
-    "$DIR/bin/gum" format -t template "$MESSAGE"
+    "$GUM_EXECUTABLE" format -t template "$MESSAGE"
     newline
 }
 
@@ -250,7 +260,7 @@ function warning() {
     MESSAGE=$(text "$1")
 
     newline
-    "$DIR/bin/gum" style --foreground="11" "$MESSAGE"
+    "$GUM_EXECUTABLE" style --foreground="11" "$MESSAGE"
 }
 
 
