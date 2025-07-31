@@ -503,8 +503,8 @@ function parseArguments() {
                 ;;
             version)
                 checkDir
-                headline "IK Docker Control $SERVICE"
-                info "Version: $SERVICE"
+                headline "IK Docker Control $VERSION"
+                info "Version: $VERSION"
                 exit 0
                 ;;
             *)
