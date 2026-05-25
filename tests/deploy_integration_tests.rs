@@ -129,12 +129,12 @@ async fn test_successful_deploy() -> Result<()> {
     })?;
     println!("Log content: \n{}", log_content);
 
-    assert!(log_content.contains("ssh -o LogLevel=QUIET -o StrictHostKeyChecking=accept-new -tA deploy-user@example.com -- mkdir -p /var/www/my-app/releases"));
-    assert!(log_content.contains("scp -o StrictHostKeyChecking=no -A"));
+    assert!(log_content.contains("ssh -o LogLevel=QUIET -o StrictHostKeyChecking=accept-new -tA deploy-user@example.com -- mkdir -p '/var/www/my-app/releases'"));
+    assert!(log_content.contains("scp -o StrictHostKeyChecking=accept-new -A"));
     assert!(log_content.contains("v1.0.0.7z deploy-user@example.com:/var/www/my-app/releases/"));
-    assert!(log_content.contains("ssh -o LogLevel=QUIET -o StrictHostKeyChecking=accept-new -tA deploy-user@example.com -- mkdir -p /var/www/my-app/releases/"));
-    assert!(log_content.contains("7z x -o/var/www/my-app/releases/"));
-    assert!(log_content.contains("rm -f /var/www/my-app/releases/"));
+    assert!(log_content.contains("ssh -o LogLevel=QUIET -o StrictHostKeyChecking=accept-new -tA deploy-user@example.com -- mkdir -p '/var/www/my-app/releases/"));
+    assert!(log_content.contains("7z x -o'/var/www/my-app/releases/"));
+    assert!(log_content.contains("rm -f '/var/www/my-app/releases/"));
     assert!(log_content.contains("shared:maintenance hard"));
     assert!(log_content.contains("migrations:migrate --no-interaction"));
 
@@ -483,11 +483,11 @@ async fn test_deploy_bugfixes() -> Result<()> {
     let lines: Vec<&str> = log_content.lines().collect();
     let shared_paths_idx = lines
         .iter()
-        .position(|l| l.contains("mkdir -p /var/www/my-app/shared/uploads"))
+        .position(|l| l.contains("mkdir -p '/var/www/my-app/shared/uploads'"))
         .expect("Shared paths command not found");
     let symlink_update_idx = lines
         .iter()
-        .position(|l| l.contains("rm -f /var/www/my-app/current && ln -s releases/"))
+        .position(|l| l.contains("rm -f '/var/www/my-app/current' && ln -s 'releases/"))
         .expect("Symlink update command not found");
 
     assert!(
@@ -582,7 +582,7 @@ fn post_deploy(console_current, release_dir, console_new, server_root) {
 
     let shared_paths_idx = lines
         .iter()
-        .position(|l| l.contains("mkdir -p /var/www/my-app/shared/uploads"))
+        .position(|l| l.contains("mkdir -p '/var/www/my-app/shared/uploads'"))
         .expect("Shared paths command not found");
 
     let maintenance_idx = lines
@@ -607,7 +607,7 @@ fn post_deploy(console_current, release_dir, console_new, server_root) {
 
     let symlink_update_idx = lines
         .iter()
-        .position(|l| l.contains("rm -f /var/www/my-app/current && ln -s releases/"))
+        .position(|l| l.contains("rm -f '/var/www/my-app/current' && ln -s 'releases/"))
         .expect("Symlink update command not found");
 
     // Verify order: Shared paths -> Maintenance -> Pre-hook -> Migrations -> Post-hook -> Symlink

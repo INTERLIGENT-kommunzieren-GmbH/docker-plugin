@@ -60,7 +60,7 @@ pub fn detect_platform() -> PlatformInfo {
         let docker0_ip = get_docker0_ip();
         let bind_ip = docker0_ip
             .clone()
-            .unwrap_or_else(|| "localhost".to_string());
+            .unwrap_or_else(|| "127.0.0.1".to_string());
 
         ui::debug(format!(
             "Detected Native Linux platform, bind_ip: {}",

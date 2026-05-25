@@ -184,16 +184,58 @@ fn main() {
                 eprintln!("Forwarding setup failed: {}", e);
                 std::process::exit(1);
             }
+            eprintln!("SSH agent forwarding started in daemon mode.");
+            signal::ctrl_c().await.unwrap();
+        });
+        return;
+    }
+
+    // Ensure the SSH agent forwarding daemon is running and publish SSH_AUTH_PORT
+    // before creating the Tokio runtime so set_var is single-threaded (safe).
+    if std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
+        let platform_info = utils::platform::detect_platform();
+        if !utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT) {
+            eprintln!("Starting SSH agent forwarding daemon...");
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    match std::process::Command::new(&exe)
+                        .arg("--start-ssh-agent")
+                        .spawn()
+                    {
+                        Ok(_) => {
+                            for _ in 0..50 {
+                                if utils::forwarding::is_port_open(
+                                    &platform_info.bind_ip,
+                                    SSH_AGENT_PORT,
+                                ) {
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to spawn SSH agent daemon: {}", e);
+                        }
+                    }
+                }
+                Err(_) => {
+                    eprintln!("Warning: Could not determine executable path to start SSH agent daemon");
+                }
+            }
+        }
+
+        if utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT) {
+            // SAFETY: called before the Tokio runtime is created, so no other
+            // threads exist yet and there are no concurrent env reads.
             unsafe {
                 std::env::set_var(
                     "SSH_AUTH_PORT",
                     format!("{}:{}", platform_info.bind_ip, SSH_AGENT_PORT),
                 );
             }
-            eprintln!("SSH agent forwarding started in daemon mode.");
-            signal::ctrl_c().await.unwrap();
-        });
-        return;
+        } else {
+            eprintln!("Warning: SSH agent forwarding is not available. SSH keys may not be accessible.");
+        }
     }
 
     // Normal path
@@ -301,56 +343,6 @@ async fn async_main() -> anyhow::Result<()> {
         utils::dependencies::check_dependencies()?;
     }
 
-    if cli.stop_ssh_agent {
-        if let Err(e) = docker_control::utils::stop_ssh_agent() {
-            ui::critical(format!("Failed to stop SSH agent: {}", e));
-            return Err(e);
-        } else {
-            ui::info("SSH agent forwarding stopped.");
-        }
-        return Ok(());
-    }
-
-    if cli.restart_ssh_agent {
-        if let Err(e) = docker_control::utils::stop_ssh_agent() {
-            ui::warning(format!("Failed to stop SSH agent: {}", e));
-        }
-        // Then start
-    }
-
-    if cli.start_ssh_agent || cli.restart_ssh_agent {
-        let daemonize = Daemonize::new();
-        match daemonize.start() {
-            Ok(_) => {
-                // In daemon process
-                // Platform detection and forwarding
-                let platform_info = utils::platform::detect_platform();
-                ui::debug(format!("Platform detected: {:?}", platform_info.platform));
-
-                if let Err(e) = utils::forwarding::ensure_forwarding(&platform_info).await {
-                    ui::critical(format!("Forwarding setup failed: {}", e));
-                    std::process::exit(1);
-                }
-
-                // Set SSH_AUTH_PORT
-                unsafe {
-                    std::env::set_var(
-                        "SSH_AUTH_PORT",
-                        format!("{}:{}", platform_info.bind_ip, SSH_AGENT_PORT),
-                    );
-                }
-
-                ui::info("SSH agent forwarding started in daemon mode.");
-                signal::ctrl_c().await.unwrap();
-                std::process::exit(0);
-            }
-            Err(e) => {
-                ui::critical(format!("Failed to daemonize: {}", e));
-                return Err(anyhow::anyhow!("Failed to daemonize: {}", e));
-            }
-        }
-    }
-
     // Initialize assets
     if let Ok(asset_manager) = assets::AssetManager::new() {
         if let Err(e) = asset_manager.ensure_assets() {
@@ -373,48 +365,6 @@ async fn async_main() -> anyhow::Result<()> {
     } else {
         project_dir
     };
-
-    // Platform detection
-    let platform_info = utils::platform::detect_platform();
-    ui::debug(format!("Platform detected: {:?}", platform_info.platform));
-
-    // Ensure SSH agent forwarding is running
-    if std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err()
-        && !utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT)
-    {
-        ui::info("Starting SSH agent forwarding daemon...");
-        // Spawn the daemon
-        if let Ok(exe) = std::env::current_exe() {
-            if let Err(e) = std::process::Command::new(exe)
-                .arg("--start-ssh-agent")
-                .spawn()
-            {
-                ui::warning(format!("Failed to spawn SSH agent daemon: {}", e));
-            } else {
-                // Wait for it to start
-                for _ in 0..50 {
-                    if utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT) {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
-        } else {
-            ui::warning("Could not determine executable path to start SSH agent daemon");
-        }
-    }
-
-    if utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT) {
-        // Set SSH_AUTH_PORT
-        unsafe {
-            std::env::set_var(
-                "SSH_AUTH_PORT",
-                format!("{}:{}", platform_info.bind_ip, SSH_AGENT_PORT),
-            );
-        }
-    } else {
-        ui::warning("SSH agent forwarding is not available. SSH keys may not be accessible.");
-    }
 
     let command = match cli.command {
         Some(cmd) => cmd,

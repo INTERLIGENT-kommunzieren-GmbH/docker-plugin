@@ -9,6 +9,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Wraps a string in single quotes and escapes any embedded single quotes so it
+/// is safe to embed in a remote shell command string passed via `exec_ssh`.
+fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 pub async fn execute(
     project_dir: &Path,
     env_name: String,
@@ -122,6 +128,7 @@ pub async fn execute(
     })
     .await
     {
+        let _ = fs::remove_file(&archive_path);
         if let Some(webhook) = &env.teams_webhook_url {
             let _ = send_teams_notification(
                 webhook,
@@ -135,6 +142,8 @@ pub async fn execute(
         }
         return Err(e);
     }
+
+    let _ = fs::remove_file(&archive_path);
 
     // Teams notification: success
     if let Some(webhook) = &env.teams_webhook_url {
@@ -250,6 +259,7 @@ async fn create_deployment_archive(
 
     let status = docker_cmd.status()?;
     if !status.success() {
+        let _ = fs::remove_dir_all(&temp_extract_dir);
         return Err(anyhow!("Composer install failed"));
     }
 
@@ -261,6 +271,7 @@ async fn create_deployment_archive(
         .status()?;
 
     if !status.success() {
+        let _ = fs::remove_dir_all(&temp_extract_dir);
         return Err(anyhow!("7z compression failed"));
     }
 
@@ -293,7 +304,7 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
     let remote_release_path = format!("{}/{}", remote_releases, ctx.release_dir);
 
     // 1. Ensure releases dir exists
-    ssh::exec_ssh(user, domain, &format!("mkdir -p {}", remote_releases))?;
+    ssh::exec_ssh(user, domain, &format!("mkdir -p {}", sq(&remote_releases)))?;
 
     // 2. Transfer archive
     ui::info("Transferring archive...");
@@ -301,13 +312,13 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
 
     // 3. Extract and remove archive
     ui::info("Extracting archive...");
-    ssh::exec_ssh(user, domain, &format!("mkdir -p {}", remote_release_path))?;
+    ssh::exec_ssh(user, domain, &format!("mkdir -p {}", sq(&remote_release_path)))?;
     ssh::exec_ssh(
         user,
         domain,
-        &format!("7z x -o{} {}", remote_release_path, remote_archive),
+        &format!("7z x -o{} {}", sq(&remote_release_path), sq(&remote_archive)),
     )?;
-    ssh::exec_ssh(user, domain, &format!("rm -f {}", remote_archive))?;
+    ssh::exec_ssh(user, domain, &format!("rm -f {}", sq(&remote_archive)))?;
 
     // 4. Cleanup old releases (keep last 5)
     // ls -d1t $SERVER_ROOT/releases/* | grep -v $(readlink -f $SERVER_ROOT/current) | egrep "^$SERVER_ROOT/releases/[0-9]{14}_.+$" | tail -n +6 | xargs rm -rf
@@ -323,13 +334,15 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
         for dir in dirs {
             let shared_path = format!("{}/shared/{}", ctx.server_root, dir);
             let target_path = format!("{}/{}", remote_release_path, dir);
-            ssh::exec_ssh(user, domain, &format!("mkdir -p {}", shared_path))?;
+            ssh::exec_ssh(user, domain, &format!("mkdir -p {}", sq(&shared_path)))?;
             ssh::exec_ssh(
                 user,
                 domain,
                 &format!(
                     "rm -rf {} && ln -sf {} {}",
-                    target_path, shared_path, target_path
+                    sq(&target_path),
+                    sq(&shared_path),
+                    sq(&target_path)
                 ),
             )?;
         }
@@ -338,15 +351,21 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
         for file in files {
             let shared_path = format!("{}/shared/{}", ctx.server_root, file);
             let target_path = format!("{}/{}", remote_release_path, file);
-            let shared_dir = Path::new(&shared_path).parent().unwrap().to_string_lossy();
-            ssh::exec_ssh(user, domain, &format!("mkdir -p {}", shared_dir))?;
-            ssh::exec_ssh(user, domain, &format!("touch {}", shared_path))?;
+            let shared_dir = Path::new(&shared_path)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            ssh::exec_ssh(user, domain, &format!("mkdir -p {}", sq(&shared_dir)))?;
+            ssh::exec_ssh(user, domain, &format!("touch {}", sq(&shared_path)))?;
             ssh::exec_ssh(
                 user,
                 domain,
                 &format!(
                     "rm -f {} && ln -sf {} {}",
-                    target_path, shared_path, target_path
+                    sq(&target_path),
+                    sq(&shared_path),
+                    sq(&target_path)
                 ),
             )?;
         }
@@ -536,12 +555,16 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
 
     // 11. Update symlink
     ui::info("Updating current symlink...");
+    let current_symlink = format!("{}/current", ctx.server_root);
+    let release_target = format!("releases/{}", ctx.release_dir);
     ssh::exec_ssh(
         user,
         domain,
         &format!(
-            "rm -f {}/current && ln -s releases/{} {}/current",
-            ctx.server_root, ctx.release_dir, ctx.server_root
+            "rm -f {} && ln -s {} {}",
+            sq(&current_symlink),
+            sq(&release_target),
+            sq(&current_symlink)
         ),
     )?;
 

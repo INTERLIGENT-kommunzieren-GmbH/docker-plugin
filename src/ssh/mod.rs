@@ -22,10 +22,9 @@ pub fn exec_ssh(user: &str, domain: &str, command: &str) -> Result<()> {
 }
 
 pub fn copy_ssh(user: &str, domain: &str, src: &std::path::Path, dest: &str) -> Result<()> {
-    // scp -o StrictHostKeyChecking=no -A "$3" "$USER@$DOMAIN":"$4"
     let status = Command::new("scp")
         .arg("-o")
-        .arg("StrictHostKeyChecking=no")
+        .arg("StrictHostKeyChecking=accept-new")
         .arg("-A")
         .arg(src)
         .arg(format!("{}@{}:{}", user, domain, dest))

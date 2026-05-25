@@ -10,16 +10,19 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
     ui::info("Initializing new project...");
 
     if project_dir.exists() && fs::read_dir(project_dir)?.next().is_some() {
-        // Check if it's already managed
         if is_managed(project_dir) {
             ui::warning("Directory is already managed by docker-control.");
             return Ok(());
         }
 
-        // If directory is not empty and not managed, we should be careful
-        // but the original bash script says it only works in empty directories
-        // Actually, looking at bash it doesn't explicitly check if empty before copying,
-        // but README says "Only works in empty directories".
+        ui::warning("Directory is not empty. Existing files may be overwritten.");
+        if !Confirm::new("Continue initializing in this non-empty directory?")
+            .with_default(false)
+            .prompt()?
+        {
+            ui::info("Initialization cancelled.");
+            return Ok(());
+        }
     }
 
     // Find template directory

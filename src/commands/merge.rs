@@ -243,16 +243,21 @@ pub fn execute(project_dir: &Path, module: Option<String>, options: MergeOptions
                         }
 
                         // Commit the resolution
-                        let _ = Command::new("git")
+                        let continue_status = Command::new("git")
                             .arg("-C")
                             .arg(&merge_wt_path)
                             .arg("cherry-pick")
                             .arg("--continue")
-                            .env("GIT_EDITOR", "true") // avoid opening editor if possible
+                            .env("GIT_EDITOR", "true")
                             .stdin(Stdio::inherit())
                             .stdout(Stdio::inherit())
                             .stderr(Stdio::inherit())
-                            .status();
+                            .status()?;
+
+                        if !continue_status.success() {
+                            ui::critical("cherry-pick --continue failed. You may still have unresolved conflicts.");
+                            continue;
+                        }
                         break;
                     }
                     _ => {
