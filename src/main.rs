@@ -192,7 +192,16 @@ fn main() {
 
     // Ensure the SSH agent forwarding daemon is running and publish SSH_AUTH_PORT
     // before creating the Tokio runtime so set_var is single-threaded (safe).
-    if std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
+    // Skip for commands that don't use SSH and would otherwise block on `docker info`
+    // inside detect_platform() before the user sees any output.
+    let no_ssh_needed = args.iter().any(|a| {
+        a == "--help"
+            || a == "-h"
+            || a == "--version"
+            || a == "-V"
+            || a == "docker-cli-plugin-metadata"
+    });
+    if !no_ssh_needed && std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
         let platform_info = utils::platform::detect_platform();
         if !utils::forwarding::is_port_open(&platform_info.bind_ip, SSH_AGENT_PORT) {
             eprintln!("Starting SSH agent forwarding daemon...");
