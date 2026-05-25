@@ -174,9 +174,34 @@ fn main() {
             .stdout(std::fs::File::create(stdout_file).unwrap())
             .stderr(std::fs::File::create(stderr_file).unwrap());
 
-        daemonize.start().expect("Failed to daemonize");
+        if let Err(e) = daemonize.start() {
+            // Check whether the daemon is genuinely running by reading the pid file
+            // and verifying the process is alive, rather than showing a cryptic error.
+            let running_pid = std::fs::read_to_string(pid_file)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .filter(|&pid| {
+                    // /proc/<pid> exists on Linux; on macOS fall back to kill -0
+                    #[cfg(target_os = "linux")]
+                    {
+                        std::path::Path::new(&format!("/proc/{}", pid)).exists()
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+                    }
+                });
 
-        // Now start the async runtime
+            if let Some(pid) = running_pid {
+                eprintln!("SSH agent daemon is already running (PID: {}).", pid);
+            } else {
+                eprintln!("Failed to start SSH agent daemon: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+
+        // This code runs only in the daemon child process.
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let platform_info = utils::platform::detect_platform();
