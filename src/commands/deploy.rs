@@ -312,11 +312,19 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
 
     // 3. Extract and remove archive
     ui::info("Extracting archive...");
-    ssh::exec_ssh(user, domain, &format!("mkdir -p {}", sq(&remote_release_path)))?;
     ssh::exec_ssh(
         user,
         domain,
-        &format!("7z x -o{} {}", sq(&remote_release_path), sq(&remote_archive)),
+        &format!("mkdir -p {}", sq(&remote_release_path)),
+    )?;
+    ssh::exec_ssh(
+        user,
+        domain,
+        &format!(
+            "7z x -o{} {}",
+            sq(&remote_release_path),
+            sq(&remote_archive)
+        ),
     )?;
     ssh::exec_ssh(user, domain, &format!("rm -f {}", sq(&remote_archive)))?;
 

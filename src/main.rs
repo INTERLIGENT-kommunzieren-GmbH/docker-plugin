@@ -219,7 +219,9 @@ fn main() {
                     }
                 }
                 Err(_) => {
-                    eprintln!("Warning: Could not determine executable path to start SSH agent daemon");
+                    eprintln!(
+                        "Warning: Could not determine executable path to start SSH agent daemon"
+                    );
                 }
             }
         }
@@ -234,7 +236,9 @@ fn main() {
                 );
             }
         } else {
-            eprintln!("Warning: SSH agent forwarding is not available. SSH keys may not be accessible.");
+            eprintln!(
+                "Warning: SSH agent forwarding is not available. SSH keys may not be accessible."
+            );
         }
     }
 

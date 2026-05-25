@@ -255,7 +255,9 @@ pub fn execute(project_dir: &Path, module: Option<String>, options: MergeOptions
                             .status()?;
 
                         if !continue_status.success() {
-                            ui::critical("cherry-pick --continue failed. You may still have unresolved conflicts.");
+                            ui::critical(
+                                "cherry-pick --continue failed. You may still have unresolved conflicts.",
+                            );
                             continue;
                         }
                         break;
