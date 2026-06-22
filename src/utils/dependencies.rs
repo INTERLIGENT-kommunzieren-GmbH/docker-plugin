@@ -189,9 +189,11 @@ pub fn check_dependencies() -> Result<()> {
 
     if let Some(out) = version_output("docker", &["compose", "version"]) {
         match parse_version(&out) {
-            Some(v) => check_version("Docker Compose", v, MIN_COMPOSE_VERSION).inspect_err(|e| {
-                ui::critical(e.to_string());
-            })?,
+            Some(v) => {
+                check_version("Docker Compose", v, MIN_COMPOSE_VERSION).inspect_err(|e| {
+                    ui::critical(e.to_string());
+                })?
+            }
             None => ui::warning(format!(
                 "Could not parse Docker Compose version from: {}",
                 out.trim()
