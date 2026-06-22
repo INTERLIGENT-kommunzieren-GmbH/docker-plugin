@@ -103,15 +103,9 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         if backup_item.exists() {
             ui::info(format!("Restoring {}...", item));
             let (src, dst) = if backup_item.is_dir() {
-                (
-                    format!("{}/{}/", backup_name, item),
-                    format!("{}/", item),
-                )
+                (format!("{}/{}/", backup_name, item), format!("{}/", item))
             } else {
-                (
-                    format!("{}/{}", backup_name, item),
-                    item.to_string(),
-                )
+                (format!("{}/{}", backup_name, item), item.to_string())
             };
             let status = Command::new("sudo")
                 .arg("rsync")
