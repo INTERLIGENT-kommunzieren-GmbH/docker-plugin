@@ -117,11 +117,19 @@ services:
       com.interligent.dockerplugin.service: "mail"
       com.interligent.dockerplugin.dir: "${PWD}"
       com.interligent.dockerplugin.project: "${PROJECTNAME}"
-    image: mailhog/mailhog
+    environment:
+      MP_WEBROOT: /_mail/
+      VIRTUAL_HOST: ${BASE_DOMAIN}, www.${BASE_DOMAIN}
+      VIRTUAL_PATH: /_mail/
+      VIRTUAL_DEST: /_mail/
+    image: axllent/mailpit
     platform: linux/amd64
     networks:
+      - "frontend-tier"
       - "backend-tier"
-    restart: always
+    deploy:
+      restart_policy:
+        condition: any
 
   php:
     labels:
