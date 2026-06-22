@@ -97,19 +97,35 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         return Err(anyhow!("Failed to apply template."));
     }
 
-    // 4. Copy htdocs folder back from backup via rsync and sudo
-    ui::info("Restoring htdocs...");
-    let status = Command::new("sudo")
-        .arg("rsync")
-        .arg("-a")
-        .arg(format!("{}/htdocs/", backup_name))
-        .arg("htdocs/")
-        .current_dir(project_dir)
-        .status()
-        .context("Failed to restore htdocs")?;
+    // 4. Restore folders/files from backup if present
+    for item in ["htdocs", ".idea", ".claude", "CLAUDE.md"] {
+        let backup_item = project_dir.join(&backup_name).join(item);
+        if backup_item.exists() {
+            ui::info(format!("Restoring {}...", item));
+            let (src, dst) = if backup_item.is_dir() {
+                (
+                    format!("{}/{}/", backup_name, item),
+                    format!("{}/", item),
+                )
+            } else {
+                (
+                    format!("{}/{}", backup_name, item),
+                    item.to_string(),
+                )
+            };
+            let status = Command::new("sudo")
+                .arg("rsync")
+                .arg("-a")
+                .arg(&src)
+                .arg(&dst)
+                .current_dir(project_dir)
+                .status()
+                .context(format!("Failed to restore {}", item))?;
 
-    if !status.success() {
-        ui::warning("Failed to restore htdocs folder. It might not exist in backup.");
+            if !status.success() {
+                ui::warning(format!("Failed to restore {}.", item));
+            }
+        }
     }
 
     // 5. Add compose.override.yml with capistrano service extracted from backup
