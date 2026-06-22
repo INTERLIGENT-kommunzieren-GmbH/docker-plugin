@@ -120,6 +120,7 @@ services:
     environment:
       MP_WEBROOT: /_mail/
       VIRTUAL_HOST: ${BASE_DOMAIN}, www.${BASE_DOMAIN}
+      VIRTUAL_PORT: 8025
       VIRTUAL_PATH: /_mail/
       VIRTUAL_DEST: /_mail/
     image: axllent/mailpit
