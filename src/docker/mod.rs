@@ -122,6 +122,24 @@ fn ensure_ingress_volumes(brew_prefix: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn is_running(project_dir: &Path) -> bool {
+    let output = Command::new("docker")
+        .arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("ps")
+        .arg("--services")
+        .arg("--filter")
+        .arg("status=running")
+        .current_dir(project_dir)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        _ => false,
+    }
+}
+
 pub fn console(project_dir: &Path, container: Option<String>) -> Result<()> {
     let service = container.unwrap_or_else(|| "php".to_string());
 

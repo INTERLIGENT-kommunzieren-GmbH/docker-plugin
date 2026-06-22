@@ -1,5 +1,6 @@
 use crate::assets::AssetManager;
 use crate::ui;
+use crate::utils;
 use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::path::Path;
@@ -38,6 +39,7 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
 
     ui::info(format!("Creating backup in {}...", backup_name));
     fs::create_dir_all(&backup_dir)?;
+    utils::exclude_from_phpstorm(project_dir, &backup_name)?;
 
     // We use rsync with sudo to keep permissions and owner info
     // Excluding the backup directory itself and .git

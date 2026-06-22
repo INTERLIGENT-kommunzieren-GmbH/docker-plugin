@@ -1,6 +1,6 @@
 [package]
 name = "docker-control"
-version = "2.2.6"
+version = "2.2.7"
 edition = "2024"
 description = "a CLI tool to control ik docker stack"
 homepage = "https://github.com/INTERLIGENT-kommunzieren-GmbH/docker-control"

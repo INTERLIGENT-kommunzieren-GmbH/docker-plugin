@@ -1,5 +1,7 @@
 use crate::assets::AssetManager;
+use crate::docker;
 use crate::ui;
+use crate::utils;
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -8,6 +10,12 @@ use walkdir::WalkDir;
 
 pub fn execute(project_dir: &Path) -> Result<()> {
     ui::info("Updating project with latest template...");
+
+    let was_running = docker::is_running(project_dir);
+    if was_running {
+        ui::info("Stopping project...");
+        docker::execute_compose(project_dir, &["down"])?;
+    }
 
     let asset_manager = AssetManager::new()?;
     asset_manager.ensure_assets()?;
@@ -22,6 +30,7 @@ pub fn execute(project_dir: &Path) -> Result<()> {
 
     ui::info(format!("Creating backup {}...", backup_name));
     fs::create_dir_all(&backup_dir)?;
+    utils::exclude_from_phpstorm(project_dir, &backup_name)?;
 
     // Backup current files (excluding what bash excludes)
     let backup_excludes = ["backup_*", ".git", "htdocs", "logs", "volumes"];
@@ -52,6 +61,11 @@ pub fn execute(project_dir: &Path) -> Result<()> {
 
         fs::write(&gitignore, lines.join("\n"))?;
         fs::remove_file(gitignore_dist)?;
+    }
+
+    if was_running {
+        ui::info("Restarting project...");
+        docker::execute_compose(project_dir, &["up", "-d"])?;
     }
 
     ui::success("Project updated successfully.");
