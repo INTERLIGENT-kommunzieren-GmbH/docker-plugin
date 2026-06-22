@@ -177,9 +177,8 @@ pub fn check_dependencies() -> Result<()> {
     // Version checks — only reached if the binaries are present.
     if let Some(out) = version_output("docker", &["--version"]) {
         match parse_version(&out) {
-            Some(v) => check_version("Docker", v, MIN_DOCKER_VERSION).map_err(|e| {
+            Some(v) => check_version("Docker", v, MIN_DOCKER_VERSION).inspect_err(|e| {
                 ui::critical(e.to_string());
-                e
             })?,
             None => ui::warning(format!(
                 "Could not parse Docker version from: {}",
@@ -190,9 +189,8 @@ pub fn check_dependencies() -> Result<()> {
 
     if let Some(out) = version_output("docker", &["compose", "version"]) {
         match parse_version(&out) {
-            Some(v) => check_version("Docker Compose", v, MIN_COMPOSE_VERSION).map_err(|e| {
+            Some(v) => check_version("Docker Compose", v, MIN_COMPOSE_VERSION).inspect_err(|e| {
                 ui::critical(e.to_string());
-                e
             })?,
             None => ui::warning(format!(
                 "Could not parse Docker Compose version from: {}",
