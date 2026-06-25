@@ -3,7 +3,8 @@ use crate::git::GitService;
 use crate::ui;
 use crate::utils;
 use anyhow::Result;
-use bollard::container::ListContainersOptions;
+use bollard::models::ContainerSummaryStateEnum;
+use bollard::query_parameters::ListContainersOptions;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -76,7 +77,7 @@ pub async fn get_summary(project_dir: &Path) -> String {
         match docker
             .list_containers(Some(ListContainersOptions {
                 all: true,
-                filters,
+                filters: Some(filters),
                 ..Default::default()
             }))
             .await
@@ -108,7 +109,7 @@ pub async fn get_summary(project_dir: &Path) -> String {
                 let container_count = project_containers.len();
                 let running_count = project_containers
                     .iter()
-                    .filter(|c| c.state.as_deref() == Some("running"))
+                    .filter(|c| c.state == Some(ContainerSummaryStateEnum::RUNNING))
                     .count();
 
                 if container_count > 0 {
@@ -189,7 +190,7 @@ async fn show_docker_status(project_dir: &Path) {
     match docker
         .list_containers(Some(ListContainersOptions {
             all: true,
-            filters,
+            filters: Some(filters),
             ..Default::default()
         }))
         .await
@@ -221,7 +222,7 @@ async fn show_docker_status(project_dir: &Path) {
             let container_count = project_containers.len();
             let running_count = project_containers
                 .iter()
-                .filter(|c| c.state.as_deref() == Some("running"))
+                .filter(|c| c.state == Some(ContainerSummaryStateEnum::RUNNING))
                 .count();
 
             if container_count > 0 {

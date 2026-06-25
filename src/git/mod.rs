@@ -32,7 +32,7 @@ impl GitService {
         let head = self.repo.head().context("Failed to get HEAD")?;
         let branch = head
             .shorthand()
-            .ok_or_else(|| anyhow!("HEAD is not a branch"))?;
+            .map_err(|_| anyhow!("HEAD is not a branch"))?;
         Ok(branch.to_string())
     }
 
@@ -133,7 +133,7 @@ impl GitService {
         for id in revwalk {
             let id = id?;
             let commit = self.repo.find_commit(id)?;
-            let summary = commit.summary().unwrap_or("").to_string();
+            let summary = commit.summary().ok().flatten().unwrap_or("").to_string();
 
             // Filter out "release:" commits
             if !summary.starts_with("release:") {

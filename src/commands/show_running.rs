@@ -1,6 +1,6 @@
 use crate::ui;
 use anyhow::Result;
-use bollard::container::ListContainersOptions;
+use bollard::query_parameters::ListContainersOptions;
 use std::collections::HashMap;
 
 pub async fn execute() -> Result<()> {
@@ -20,7 +20,7 @@ pub async fn execute() -> Result<()> {
     match docker
         .list_containers(Some(ListContainersOptions {
             all: true,
-            filters,
+            filters: Some(filters),
             ..Default::default()
         }))
         .await

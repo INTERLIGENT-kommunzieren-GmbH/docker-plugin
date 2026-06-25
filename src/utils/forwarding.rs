@@ -1,7 +1,7 @@
 use crate::ui;
 use crate::utils::platform::PlatformInfo;
 use anyhow::{Result, anyhow};
-use bollard::container::ListContainersOptions;
+use bollard::query_parameters::ListContainersOptions;
 use std::collections::HashMap;
 use std::net::TcpStream as StdTcpStream;
 use std::time::Duration;
@@ -136,7 +136,7 @@ async fn restart_php_containers() -> Result<()> {
     let containers = docker
         .list_containers(Some(ListContainersOptions {
             all: false,
-            filters,
+            filters: Some(filters),
             ..Default::default()
         }))
         .await
