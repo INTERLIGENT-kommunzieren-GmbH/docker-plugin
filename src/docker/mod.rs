@@ -188,6 +188,33 @@ pub fn console(project_dir: &Path, container: Option<String>) -> Result<()> {
     Ok(())
 }
 
+pub fn exec_as_root(project_dir: &Path, service: &str, args: &[&str]) -> Result<()> {
+    let mut cmd = Command::new("docker");
+    cmd.arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("exec")
+        .arg("-T")
+        .arg("-u")
+        .arg("root")
+        .current_dir(project_dir)
+        .arg(service)
+        .args(args);
+
+    let status = cmd
+        .status()
+        .context("Failed to execute docker compose exec (root)")?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "docker compose exec (root) failed with status {}",
+            status
+        ));
+    }
+
+    Ok(())
+}
+
 fn find_ingress_dir() -> Result<PathBuf> {
     // 1. Check environment variable
     if let Ok(env_path) = std::env::var("DOCKER_CONTROL_INGRESS_DIR") {

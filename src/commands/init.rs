@@ -43,6 +43,10 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
     let htdocs_dir = project_dir.join("htdocs");
     fs::create_dir_all(&htdocs_dir)?;
 
+    if let Err(e) = crate::utils::acl::apply_host_acl(project_dir) {
+        ui::warning(format!("Could not set ACL permissions on htdocs: {}", e));
+    }
+
     // Prompts
     let project_name = Text::new("Project name:")
         .with_default(

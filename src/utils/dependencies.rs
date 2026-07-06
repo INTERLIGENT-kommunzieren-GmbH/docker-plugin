@@ -80,6 +80,13 @@ const DEPENDENCIES: &[Dependency] = &[
         critical: false,
         description: "Required for creating deployment packages",
     },
+    Dependency {
+        name: "setfacl",
+        command: "setfacl",
+        args: &["--version"],
+        critical: false,
+        description: "Required for granting the host user and the container's www-data user access to htdocs",
+    },
 ];
 
 /// Parse the first `MAJOR.MINOR` pair found in a version string like

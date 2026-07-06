@@ -484,6 +484,18 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Start => {
             check_managed(&project_dir);
             docker::execute_compose(&project_dir, &["up", "-d"])?;
+            if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set host ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
+            if let Err(e) = utils::acl::apply_container_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set container ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
         }
         Commands::StartIngress => {
             docker::execute_ingress_compose(&["up", "-d"])?;
