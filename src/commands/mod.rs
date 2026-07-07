@@ -9,3 +9,4 @@ pub mod release;
 pub mod show_running;
 pub mod status;
 pub mod update;
+pub mod upgrade;

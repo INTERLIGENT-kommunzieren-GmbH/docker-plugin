@@ -117,6 +117,8 @@ enum Commands {
     Migrate,
     /// Update the project with the current template
     Update,
+    /// Upgrade docker-control itself via Homebrew
+    Upgrade,
     /// Return metadata for Docker CLI plugin
     #[command(name = "docker-cli-plugin-metadata", hide = true)]
     Metadata,
@@ -229,6 +231,7 @@ fn main() {
             || a == "--version"
             || a == "-V"
             || a == "docker-cli-plugin-metadata"
+            || a == "upgrade"
     });
     if !no_ssh_needed && std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
         let platform_info = utils::platform::detect_platform();
@@ -559,6 +562,9 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Update => {
             commands::update::execute(&project_dir)?;
+        }
+        Commands::Upgrade => {
+            commands::upgrade::execute()?;
         }
         Commands::External(args) => {
             execute_external_script(&project_dir, args)?;
