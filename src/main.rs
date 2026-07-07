@@ -3,6 +3,7 @@
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use daemonize::Daemonize;
+use inquire::Confirm;
 use std::path::PathBuf;
 use tokio::signal;
 
@@ -474,6 +475,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Restart => {
             check_managed(&project_dir);
+            maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["down"])?;
             docker::execute_compose(&project_dir, &["up", "-d"])?;
             if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
@@ -519,6 +521,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Start => {
             check_managed(&project_dir);
+            maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["up", "-d"])?;
             if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
                 ui::warning(format!(
@@ -622,5 +625,31 @@ fn check_managed(project_dir: &std::path::Path) {
             project_dir
         ));
         std::process::exit(1);
+    }
+}
+
+fn maybe_offer_image_pull(project_dir: &std::path::Path) {
+    let outdated: Vec<_> = docker::check_outdated_images(project_dir)
+        .into_iter()
+        .filter(|s| s.outdated)
+        .collect();
+
+    if outdated.is_empty() {
+        return;
+    }
+
+    ui::warning("The following images appear to be outdated:");
+    for status in &outdated {
+        ui::warning(format!("  - {}", status.image));
+    }
+
+    if Confirm::new("Pull the latest images before starting?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false)
+    {
+        if let Err(e) = docker::execute_compose(project_dir, &["pull"]) {
+            ui::warning(format!("Failed to pull images: {}", e));
+        }
     }
 }

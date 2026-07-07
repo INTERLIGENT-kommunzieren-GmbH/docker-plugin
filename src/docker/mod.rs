@@ -122,6 +122,129 @@ fn ensure_ingress_volumes(brew_prefix: &str) -> Result<()> {
     Ok(())
 }
 
+pub struct ImageStatus {
+    pub image: String,
+    pub outdated: bool,
+}
+
+/// Best-effort check of whether the images referenced by the project's compose
+/// file are stale compared to the registry. Never fails: any error along the
+/// way (offline, missing buildx, locally-built image, etc.) just causes that
+/// image to be skipped rather than aborting the check.
+pub fn check_outdated_images(project_dir: &Path) -> Vec<ImageStatus> {
+    if std::env::var("DOCKER_CONTROL_SKIP_IMAGE_CHECK").is_ok() {
+        return Vec::new();
+    }
+
+    let images = match list_compose_images(project_dir) {
+        Ok(images) => images,
+        Err(e) => {
+            ui::debug(format!("Could not list images to check for updates: {}", e));
+            return Vec::new();
+        }
+    };
+
+    images
+        .into_iter()
+        .filter_map(|image| {
+            check_image_outdated(&image).map(|outdated| ImageStatus { image, outdated })
+        })
+        .collect()
+}
+
+fn list_compose_images(project_dir: &Path) -> Result<Vec<String>> {
+    let output = Command::new("docker")
+        .arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("config")
+        .arg("--images")
+        .current_dir(project_dir)
+        .output()
+        .context("Failed to run docker compose config --images")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "docker compose config --images failed with status {}",
+            output.status
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
+/// Returns `Some(true)` if outdated, `Some(false)` if up to date, or `None`
+/// when the image can't be checked (locally-built image with no registry
+/// digest, or the remote lookup failed/is unreachable).
+fn check_image_outdated(image: &str) -> Option<bool> {
+    let local_digest = get_local_repo_digest(image);
+    let remote_digest = get_remote_digest(image);
+
+    match (local_digest, remote_digest) {
+        (LocalDigest::Missing, Some(_)) => Some(true),
+        (LocalDigest::Present(local), Some(remote)) => Some(local != remote),
+        _ => None,
+    }
+}
+
+enum LocalDigest {
+    /// Image not present locally at all.
+    Missing,
+    /// Image present with a registry digest.
+    Present(String),
+    /// Image present but with no registry digest (e.g. locally built).
+    Unknown,
+}
+
+fn get_local_repo_digest(image: &str) -> LocalDigest {
+    let output = Command::new("docker")
+        .arg("image")
+        .arg("inspect")
+        .arg("--format")
+        .arg("{{json .RepoDigests}}")
+        .arg(image)
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return LocalDigest::Missing,
+    };
+
+    let digests: Vec<String> = match serde_json::from_slice(&output.stdout) {
+        Ok(d) => d,
+        Err(_) => return LocalDigest::Unknown,
+    };
+
+    digests
+        .first()
+        .and_then(|d| d.rsplit_once('@'))
+        .map(|(_, digest)| LocalDigest::Present(digest.to_string()))
+        .unwrap_or(LocalDigest::Unknown)
+}
+
+fn get_remote_digest(image: &str) -> Option<String> {
+    let output = Command::new("docker")
+        .arg("buildx")
+        .arg("imagetools")
+        .arg("inspect")
+        .arg(image)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Digest:"))
+        .map(|s| s.trim().to_string())
+}
+
 pub fn is_running(project_dir: &Path) -> bool {
     let output = Command::new("docker")
         .arg("compose")
