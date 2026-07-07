@@ -42,8 +42,7 @@ fn host_acl_already_set(project_dir: &Path, uid: u32) -> bool {
     let text = String::from_utf8_lossy(&output.stdout);
     let user_entry = format!("user:{}:rwx", uid);
     let default_entry = format!("default:user:{}:rwx", uid);
-    text.lines().any(|l| l.trim() == user_entry)
-        && text.lines().any(|l| l.trim() == default_entry)
+    text.lines().any(|l| l.trim() == user_entry) && text.lines().any(|l| l.trim() == default_entry)
 }
 
 /// Grants `www-data` (uid 33 inside the `php` container) rwX access to
