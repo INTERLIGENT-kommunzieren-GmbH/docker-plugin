@@ -152,6 +152,13 @@ Restart the ingress containers (stops and starts them).
 docker-control restart-ingress
 ```
 
+#### `setacl`
+Re-apply host and container ACL permissions on `htdocs` without restarting containers. Use this if file permissions between the host and container get out of sync. Requires the project containers to already be running.
+
+```bash
+docker-control setacl
+```
+
 #### `show-running`
 Show all running projects managed by the Docker plugin.
 

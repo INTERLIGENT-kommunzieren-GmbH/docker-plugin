@@ -94,6 +94,9 @@ enum Commands {
     Restart,
     /// Restart the ingress containers
     RestartIngress,
+    /// Fix host and container ACL permissions on htdocs
+    #[command(name = "setacl")]
+    SetAcl,
     /// Show all running projects managed by the Docker plugin
     ShowRunning,
     /// Start the project containers
@@ -473,10 +476,43 @@ async fn async_main() -> anyhow::Result<()> {
             check_managed(&project_dir);
             docker::execute_compose(&project_dir, &["down"])?;
             docker::execute_compose(&project_dir, &["up", "-d"])?;
+            if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set host ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
+            if let Err(e) = utils::acl::apply_container_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set container ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
         }
         Commands::RestartIngress => {
             docker::execute_ingress_compose(&["down"])?;
             docker::execute_ingress_compose(&["up", "-d"])?;
+        }
+        Commands::SetAcl => {
+            check_managed(&project_dir);
+            if !docker::is_running(&project_dir) {
+                ui::critical(
+                    "Project containers are not running. Start the project first with `docker-control start`.",
+                );
+                std::process::exit(1);
+            }
+            if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set host ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
+            if let Err(e) = utils::acl::apply_container_acl(&project_dir) {
+                ui::warning(format!(
+                    "Could not set container ACL permissions on htdocs: {}",
+                    e
+                ));
+            }
         }
         Commands::ShowRunning => {
             commands::show_running::execute().await?;
