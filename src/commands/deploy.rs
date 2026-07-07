@@ -498,12 +498,27 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
         )?;
     }
 
+    let disable_maintenance = || {
+        // Best-effort: restore both the live release and the new release from maintenance mode.
+        let _ = ssh::exec_ssh(
+            user,
+            domain,
+            &format!("{} shared:maintenance off", console_current),
+        );
+        let _ = ssh::exec_ssh(
+            user,
+            domain,
+            &format!("{} shared:maintenance off", console_new),
+        );
+    };
+
     // 12. COPS Integration
     if ctx.env.cops_integration.unwrap_or(false) {
         ui::info("Executing COPS integration...");
 
         if let Err(e) = ssh::exec_ssh(user, domain, &format!("{} cops:outdated", console_new)) {
             if ctx.yes {
+                disable_maintenance();
                 return Err(anyhow!(
                     "COPS outdated check failed: {}. Deployment aborted.",
                     e
@@ -514,12 +529,7 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
                 .with_default(false)
                 .prompt()?
             {
-                // Disable maintenance mode before exiting
-                let _ = ssh::exec_ssh(
-                    user,
-                    domain,
-                    &format!("{} shared:maintenance off", console_new),
-                );
+                disable_maintenance();
                 return Err(anyhow!(
                     "Deployment aborted due to COPS integration failure"
                 ));
@@ -528,6 +538,7 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
 
         if let Err(e) = ssh::exec_ssh(user, domain, &format!("{} cops:permissions", console_new)) {
             if ctx.yes {
+                disable_maintenance();
                 return Err(anyhow!(
                     "COPS permissions check failed: {}. Deployment aborted.",
                     e
@@ -538,12 +549,7 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
                 .with_default(false)
                 .prompt()?
             {
-                // Disable maintenance mode before exiting
-                let _ = ssh::exec_ssh(
-                    user,
-                    domain,
-                    &format!("{} shared:maintenance off", console_new),
-                );
+                disable_maintenance();
                 return Err(anyhow!(
                     "Deployment aborted due to COPS integration failure"
                 ));

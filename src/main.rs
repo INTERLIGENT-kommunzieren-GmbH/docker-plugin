@@ -576,6 +576,8 @@ fn execute_external_script(project_dir: &std::path::Path, args: Vec<String>) -> 
     let command_name = &args[0];
     let command_args = &args[1..];
 
+    utils::sanitize_command_name(command_name)?;
+
     let mut paths = vec![
         project_dir.join(format!(
             "htdocs/.docker-control/control-scripts/{}",

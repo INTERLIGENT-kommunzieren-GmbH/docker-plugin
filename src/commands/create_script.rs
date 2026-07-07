@@ -1,4 +1,5 @@
 use crate::ui;
+use crate::utils;
 use anyhow::{Result, anyhow};
 use inquire::{Select, Text};
 use std::fs;
@@ -7,7 +8,17 @@ use std::path::Path;
 const HTDOCS_LOCATION: &str = "Inside htdocs (htdocs/.docker-control/control-scripts)";
 const ROOT_LOCATION: &str = "Outside htdocs (control-scripts)";
 
+/// Escapes a string for safe interpolation inside a double-quoted bash string.
+fn escape_double_quoted(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
 pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
+    utils::sanitize_command_name(name)?;
+
     let description = Text::new("Description of the command:").prompt()?;
 
     let location = Select::new(
@@ -36,18 +47,21 @@ pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
         ));
     }
 
+    let escaped_description = escape_double_quoted(&description);
+    let escaped_name = escape_double_quoted(name);
+
     let content = format!(
         r#"#!/bin/bash
 set -e
 
-if [[ "\$1" == "_desc_" ]]; then
+if [[ "$1" == "_desc_" ]]; then
     # output command description
-    echo "{description}"
+    echo "{escaped_description}"
 
     exit 0
 fi
 
-echo "{name} - WAITING FOR IMPLEMENTATION"
+echo "{escaped_name} - WAITING FOR IMPLEMENTATION"
 
 exit 0
 "#

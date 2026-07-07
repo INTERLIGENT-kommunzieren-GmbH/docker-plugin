@@ -31,6 +31,17 @@ pub fn stop_ssh_agent() -> Result<()> {
     Ok(())
 }
 
+pub fn sanitize_command_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".."
+    {
+        return Err(anyhow::anyhow!(
+            "Invalid command name '{}': must be a plain filename with no path separators",
+            name
+        ));
+    }
+    Ok(())
+}
+
 pub fn is_managed(project_dir: &Path) -> bool {
     project_dir
         .join(".managed-by-docker-control-plugin")
