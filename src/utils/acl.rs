@@ -28,6 +28,7 @@ pub fn apply_host_acl(project_dir: &Path) -> Result<()> {
 fn host_acl_already_set(project_dir: &Path, uid: u32) -> bool {
     let output = Command::new("getfacl")
         .arg("-p")
+        .arg("-n")
         .arg("htdocs")
         .current_dir(project_dir)
         .output();
@@ -55,6 +56,7 @@ pub fn apply_container_acl(project_dir: &Path) -> Result<()> {
     run_container_setfacl(project_dir, &entry, true)?;
     Ok(())
 }
+
 
 fn run_sudo_setfacl(project_dir: &Path, entry: &str, default_acl: bool) -> Result<()> {
     let mut cmd = Command::new("sudo");
