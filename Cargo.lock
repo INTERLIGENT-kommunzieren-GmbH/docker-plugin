@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "docker-control"
-version = "2.3.11"
+version = "2.3.12"
 dependencies = [
  "anyhow",
  "bollard",

@@ -57,7 +57,6 @@ pub fn apply_container_acl(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-
 fn run_sudo_setfacl(project_dir: &Path, entry: &str, default_acl: bool) -> Result<()> {
     let mut cmd = Command::new("sudo");
     cmd.arg("setfacl").arg("-R");
