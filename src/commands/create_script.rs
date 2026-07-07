@@ -1,13 +1,22 @@
 use crate::ui;
 use anyhow::{Result, anyhow};
+use inquire::{Select, Text};
 use std::fs;
 use std::path::Path;
 
+const HTDOCS_LOCATION: &str = "Inside htdocs (htdocs/.docker-control/control-scripts)";
+const ROOT_LOCATION: &str = "Outside htdocs (control-scripts)";
+
 pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
-    let control_scripts_dir = if project_dir
-        .join("htdocs/.docker-control/control-scripts")
-        .exists()
-    {
+    let description = Text::new("Description of the command:").prompt()?;
+
+    let location = Select::new(
+        "Where should the control script be added?",
+        vec![HTDOCS_LOCATION, ROOT_LOCATION],
+    )
+    .prompt()?;
+
+    let control_scripts_dir = if location == HTDOCS_LOCATION {
         project_dir.join("htdocs/.docker-control/control-scripts")
     } else {
         project_dir.join("control-scripts")
@@ -33,7 +42,7 @@ set -e
 
 if [[ "\$1" == "_desc_" ]]; then
     # output command description
-    echo "{name} - EMPTY DESCRIPTION"
+    echo "{description}"
 
     exit 0
 fi
