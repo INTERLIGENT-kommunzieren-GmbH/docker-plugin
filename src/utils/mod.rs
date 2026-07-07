@@ -32,8 +32,7 @@ pub fn stop_ssh_agent() -> Result<()> {
 }
 
 pub fn sanitize_command_name(name: &str) -> Result<()> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".."
-    {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
         return Err(anyhow::anyhow!(
             "Invalid command name '{}': must be a plain filename with no path separators",
             name
