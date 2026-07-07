@@ -631,6 +631,7 @@ fn check_managed(project_dir: &std::path::Path) {
 }
 
 fn maybe_offer_image_pull(project_dir: &std::path::Path) {
+    ui::info("Checking container images for updates...");
     let outdated: Vec<_> = docker::check_outdated_images(project_dir)
         .into_iter()
         .filter(|s| s.outdated)
