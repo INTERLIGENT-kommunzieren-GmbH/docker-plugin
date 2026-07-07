@@ -1,4 +1,5 @@
 use crate::docker;
+use crate::ui;
 use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 use std::process::Command;
@@ -10,6 +11,7 @@ const CONTAINER_WWW_DATA_UID: u32 = 33;
 /// ACL so files later created by the container (as root or www-data) stay
 /// accessible without needing sudo again.
 pub fn apply_host_acl(project_dir: &Path) -> Result<()> {
+    ui::info("Setting host ACL permissions on htdocs (may prompt for sudo password)...");
     let uid = unsafe { libc::getuid() };
     run_sudo_setfacl(project_dir, &format!("u:{}:rwX", uid), false)?;
     run_sudo_setfacl(project_dir, &format!("u:{}:rwX", uid), true)?;
@@ -20,6 +22,7 @@ pub fn apply_host_acl(project_dir: &Path) -> Result<()> {
 /// `/var/www/html`, including a default ACL so files later created by the
 /// host user stay accessible to the container without extra steps.
 pub fn apply_container_acl(project_dir: &Path) -> Result<()> {
+    ui::info("Setting container ACL permissions on htdocs...");
     let entry = format!("u:{}:rwX", CONTAINER_WWW_DATA_UID);
     run_container_setfacl(project_dir, &entry, false)?;
     run_container_setfacl(project_dir, &entry, true)?;
