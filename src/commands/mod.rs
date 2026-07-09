@@ -1,4 +1,5 @@
 pub mod add_deploy_config;
+pub mod cleanup_backups;
 pub mod create_script;
 pub mod custom;
 pub mod deploy;

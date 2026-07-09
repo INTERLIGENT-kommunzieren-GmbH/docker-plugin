@@ -53,6 +53,24 @@ enum Commands {
         /// Container name (defaults to 'php')
         container: Option<String>,
     },
+    /// Clean up old local backup_* folders created by update/migrate
+    CleanupBackups {
+        /// Number of most-recent backups to keep (default 5)
+        #[arg(short, long, conflicts_with = "older_than")]
+        keep: Option<usize>,
+
+        /// Delete backups older than this many days
+        #[arg(long, conflicts_with = "keep")]
+        older_than: Option<u64>,
+
+        /// List backups that would be deleted without deleting them
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip interactive confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Create a custom control script
     CreateControlScript {
         /// Name of the control script
@@ -440,6 +458,14 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Console { container } => {
             check_managed(&project_dir);
             docker::console(&project_dir, container)?;
+        }
+        Commands::CleanupBackups {
+            keep,
+            older_than,
+            dry_run,
+            yes,
+        } => {
+            commands::cleanup_backups::execute(&project_dir, keep, older_than, yes, dry_run)?;
         }
         Commands::CreateControlScript { name } => {
             commands::create_script::execute(&project_dir, &name)?;

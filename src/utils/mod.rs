@@ -123,6 +123,40 @@ pub fn exclude_from_phpstorm(project_dir: &Path, folder_name: &str) -> Result<()
     Ok(())
 }
 
+pub fn remove_phpstorm_exclude(project_dir: &Path, folder_name: &str) -> Result<()> {
+    let idea_dir = project_dir.join(".idea");
+    if !idea_dir.exists() {
+        return Ok(());
+    }
+
+    let exclude_line = format!(
+        "      <excludeFolder url=\"file://$MODULE_DIR$/{}\" />\n",
+        folder_name
+    );
+
+    for entry in std::fs::read_dir(&idea_dir)
+        .context(format!("Failed to read .idea directory {:?}", idea_dir))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("iml") {
+            continue;
+        }
+
+        let content =
+            std::fs::read_to_string(&path).context(format!("Failed to read {:?}", path))?;
+
+        if !content.contains(&exclude_line) {
+            continue;
+        }
+
+        let updated = content.replace(&exclude_line, "");
+        std::fs::write(&path, updated).context(format!("Failed to write {:?}", path))?;
+    }
+
+    Ok(())
+}
+
 pub fn hash_file(path: impl AsRef<Path>) -> Result<String> {
     let content = std::fs::read(path)?;
     use sha2::{Digest, Sha256};
