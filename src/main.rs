@@ -647,6 +647,7 @@ async fn async_main() -> anyhow::Result<()> {
             commands::migrate::execute(&project_dir).await?;
         }
         Commands::Update => {
+            check_managed(&project_dir);
             commands::update::execute(&project_dir)?;
         }
         Commands::Upgrade => {
@@ -684,7 +685,7 @@ fn execute_external_script(project_dir: &std::path::Path, args: Vec<String>) -> 
 fn command_requires_managed_project(name: &str) -> bool {
     matches!(
         name,
-        "build" | "console" | "pull" | "setacl" | "start" | "stop" | "restart"
+        "build" | "console" | "pull" | "setacl" | "start" | "stop" | "restart" | "update"
     )
 }
 
