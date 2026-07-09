@@ -23,7 +23,7 @@ pub fn execute(
         return Ok(());
     }
 
-    backups.sort_by(|a, b| b.1.cmp(&a.1));
+    backups.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let candidates = select_candidates(&backups, keep, older_than_days, now);
     if candidates.is_empty() {
