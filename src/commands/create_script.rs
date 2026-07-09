@@ -1,7 +1,7 @@
 use crate::ui;
 use crate::utils;
 use anyhow::{Result, anyhow};
-use inquire::{Select, Text};
+use inquire::{Confirm, Select, Text};
 use std::fs;
 use std::path::Path;
 
@@ -20,6 +20,12 @@ pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
     utils::sanitize_command_name(name)?;
 
     let description = Text::new("Description of the command:").prompt()?;
+
+    let should_override = Confirm::new(
+        "Should this command override a built-in command of the same name, if one exists?",
+    )
+    .with_default(false)
+    .prompt()?;
 
     let location = Select::new(
         "Where should the control script be added?",
@@ -50,6 +56,12 @@ pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
     let escaped_description = escape_double_quoted(&description);
     let escaped_name = escape_double_quoted(name);
 
+    let override_block = if should_override {
+        "\nif [[ \"$1\" == \"_override_\" ]]; then\n    echo \"true\"\n    exit 0\nfi\n"
+    } else {
+        ""
+    };
+
     let content = format!(
         r#"#!/bin/bash
 set -e
@@ -60,7 +72,7 @@ if [[ "$1" == "_desc_" ]]; then
 
     exit 0
 fi
-
+{override_block}
 echo "{escaped_name} - WAITING FOR IMPLEMENTATION"
 
 exit 0

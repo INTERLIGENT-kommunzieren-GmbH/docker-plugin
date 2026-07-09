@@ -45,12 +45,9 @@ pub fn execute(
     }
 
     if !yes
-        && !Confirm::new(&format!(
-            "Remove {} backup folder(s)?",
-            candidates.len()
-        ))
-        .with_default(false)
-        .prompt()?
+        && !Confirm::new(&format!("Remove {} backup folder(s)?", candidates.len()))
+            .with_default(false)
+            .prompt()?
     {
         ui::info("Aborted.");
         return Ok(());

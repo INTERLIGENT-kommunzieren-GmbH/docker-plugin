@@ -240,6 +240,24 @@ echo "Custom command executed"
 exit 0
 ```
 
+### Command Name Clashes
+
+If a custom command's name matches a built-in `docker-control` command (e.g. a script
+named `build.sh`), you will be prompted to choose whether the built-in command or your
+custom script should run. Hitting Enter/Escape keeps the built-in behavior (today's
+default).
+
+To make your script always win without prompting, add an `_override_` block:
+
+```bash
+if [[ "$1" == "_override_" ]]; then
+    echo "true"
+    exit 0
+fi
+```
+
+`docker-control create-control-script` will offer to add this block for you.
+
 ### Project Management
 
 The plugin requires projects to be managed by the Docker control plugin (identified by a `.managed-by-docker-control` file). Most commands will check for this file and exit with an error if the current directory is not a managed project.

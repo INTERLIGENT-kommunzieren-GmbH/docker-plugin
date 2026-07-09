@@ -330,6 +330,13 @@ async fn async_main() -> anyhow::Result<()> {
             project_dir = PathBuf::from(&args[i + 1]);
             break;
         }
+        if let Some(value) = args[i]
+            .strip_prefix("--dir=")
+            .or_else(|| args[i].strip_prefix("-d="))
+        {
+            project_dir = PathBuf::from(value);
+            break;
+        }
     }
 
     let project_dir = if project_dir.exists() {
@@ -391,6 +398,39 @@ async fn async_main() -> anyhow::Result<()> {
             .unwrap();
         println!();
         return Ok(());
+    }
+
+    // Resolve a name clash between a built-in command and a same-named custom script
+    // BEFORE clap validates the built-in's own argument schema, so the clash check
+    // isn't blocked by a strict built-in (e.g. `Console`, `Deploy`) rejecting args that
+    // were actually meant for the custom script. Only `Build` accepts arbitrary extra
+    // args itself, so waiting until after parsing would make this feature unusable for
+    // every other built-in whenever extra/unrecognized args are passed.
+    if let Some((subcommand_name, trailing_args)) =
+        commands::custom::split_leading_subcommand(&args, &global_flag_tokens())
+    {
+        let is_builtin = Cli::command().get_subcommands().any(|sub| {
+            sub.get_name() == subcommand_name
+                || sub.get_all_aliases().any(|alias| alias == subcommand_name)
+        });
+
+        if is_builtin {
+            if let Some(script_path) = commands::custom::resolve_clash(
+                &project_dir,
+                &subcommand_name,
+                &commands::custom::InteractiveClashPromptProvider,
+            )? {
+                // Mirror the managed-project gate the built-in itself would have
+                // enforced; keep this list in sync with the `check_managed` calls in
+                // the match arms below.
+                if command_requires_managed_project(&subcommand_name) {
+                    check_managed(&project_dir);
+                }
+                ui::info(format!("Executing custom script: {:?}", script_path));
+                commands::custom::run_script(&project_dir, &script_path, &trailing_args)?;
+                return Ok(());
+            }
+        }
     }
 
     let cmd = Cli::command().styles(get_help_styles());
@@ -610,46 +650,41 @@ fn execute_external_script(project_dir: &std::path::Path, args: Vec<String>) -> 
 
     utils::sanitize_command_name(command_name)?;
 
-    let mut paths = vec![
-        project_dir.join(format!(
-            "htdocs/.docker-control/control-scripts/{}",
-            command_name
-        )),
-        project_dir.join(format!("control-scripts/{}", command_name)),
-    ];
-
-    if !command_name.ends_with(".sh") {
-        paths.push(project_dir.join(format!(
-            "htdocs/.docker-control/control-scripts/{}.sh",
-            command_name
-        )));
-        paths.push(project_dir.join(format!("control-scripts/{}.sh", command_name)));
-    }
-
-    for path in paths {
-        if path.exists() {
+    match commands::custom::find_script_path(project_dir, command_name) {
+        Some(path) => {
             ui::info(format!("Executing custom script: {:?}", path));
-            let mut cmd = std::process::Command::new("bash");
-            cmd.arg(&path)
-                .args(command_args)
-                .current_dir(project_dir)
-                .env("PROJECT_DIR", project_dir);
-
-            // Set environment variables for the script if needed
-            // original bash script has access to LIB_DIR, PROJECT_DIR, etc.
-
-            let status = cmd.status()?;
-            if !status.success() {
-                return Err(anyhow::anyhow!(
-                    "Custom script failed with status {}",
-                    status
-                ));
-            }
-            return Ok(());
+            commands::custom::run_script(project_dir, &path, command_args)
         }
+        None => Err(anyhow::anyhow!("Unknown command: {}", command_name)),
     }
+}
 
-    Err(anyhow::anyhow!("Unknown command: {}", command_name))
+/// The clap-registered names of built-ins whose match arm calls `check_managed`. Used
+/// to apply the same gate when a custom script wins a name clash against one of them.
+fn command_requires_managed_project(name: &str) -> bool {
+    matches!(
+        name,
+        "build" | "console" | "pull" | "setacl" | "start" | "stop" | "restart"
+    )
+}
+
+/// The long/short flag tokens for every `global = true` argument on `Cli`, derived
+/// from clap itself so this can't silently drift out of sync with the `Cli` struct.
+fn global_flag_tokens() -> Vec<String> {
+    Cli::command()
+        .get_arguments()
+        .filter(|arg| arg.is_global_set())
+        .flat_map(|arg| {
+            let mut tokens = Vec::new();
+            if let Some(long) = arg.get_long() {
+                tokens.push(format!("--{long}"));
+            }
+            if let Some(short) = arg.get_short() {
+                tokens.push(format!("-{short}"));
+            }
+            tokens
+        })
+        .collect()
 }
 
 fn check_managed(project_dir: &std::path::Path) {

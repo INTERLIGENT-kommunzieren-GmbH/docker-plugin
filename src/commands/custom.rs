@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -6,6 +7,163 @@ use std::process::Command;
 pub struct CustomCommand {
     pub name: String,
     pub description: String,
+}
+
+/// Locates a custom script for `name`, checking htdocs before the project root and
+/// trying both the bare name and `<name>.sh`. Shared by dispatch and clash detection.
+pub fn find_script_path(project_dir: &Path, name: &str) -> Option<PathBuf> {
+    let mut candidates = vec![
+        project_dir.join(format!("htdocs/.docker-control/control-scripts/{}", name)),
+        project_dir.join(format!("control-scripts/{}", name)),
+    ];
+
+    if !name.ends_with(".sh") {
+        candidates.push(project_dir.join(format!(
+            "htdocs/.docker-control/control-scripts/{}.sh",
+            name
+        )));
+        candidates.push(project_dir.join(format!("control-scripts/{}.sh", name)));
+    }
+
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Runs a resolved custom script with the given arguments.
+pub fn run_script(project_dir: &Path, script_path: &Path, args: &[String]) -> Result<()> {
+    let status = Command::new("bash")
+        .arg(script_path)
+        .args(args)
+        .current_dir(project_dir)
+        .env("PROJECT_DIR", project_dir)
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!(
+            "Custom script '{}' exited with {}",
+            script_path.display(),
+            status
+        ));
+    }
+
+    Ok(())
+}
+
+/// Mirrors `_desc_`: a script opts into overriding a same-named built-in command by
+/// printing "true" when invoked with `_override_` as its first argument. Scripts that
+/// don't reference `_override_` at all (e.g. ones written before this feature existed)
+/// are never invoked, so they can't be triggered into running their real body just by
+/// being probed.
+pub fn get_override(project_dir: &Path, path: &Path) -> bool {
+    match fs::read_to_string(path) {
+        Ok(contents) if contents.contains("_override_") => {}
+        _ => return false,
+    }
+
+    match Command::new("bash")
+        .arg(path)
+        .arg("_override_")
+        .current_dir(project_dir)
+        .env("PROJECT_DIR", project_dir)
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "true",
+        _ => false,
+    }
+}
+
+pub enum ClashChoice {
+    Builtin,
+    Custom,
+}
+
+pub trait ClashPromptProvider {
+    fn resolve(&self, command_name: &str) -> Result<ClashChoice>;
+}
+
+pub struct InteractiveClashPromptProvider;
+
+impl ClashPromptProvider for InteractiveClashPromptProvider {
+    fn resolve(&self, command_name: &str) -> Result<ClashChoice> {
+        const BUILTIN: &str = "Built-in command";
+        const CUSTOM: &str = "Custom script";
+
+        let choice = inquire::Select::new(
+            &format!(
+                "'{}' matches both a built-in command and a custom script. Which should run?",
+                command_name
+            ),
+            vec![BUILTIN, CUSTOM],
+        )
+        .prompt()
+        .unwrap_or(BUILTIN);
+
+        Ok(if choice == CUSTOM {
+            ClashChoice::Custom
+        } else {
+            ClashChoice::Builtin
+        })
+    }
+}
+
+/// Resolves a name clash between a built-in command and a custom script of the same
+/// name. Returns `None` if there's no clash (built-in should proceed as usual), or
+/// `Some(script_path)` if the custom script should run instead.
+pub fn resolve_clash(
+    project_dir: &Path,
+    command_name: &str,
+    prompt_provider: &dyn ClashPromptProvider,
+) -> Result<Option<PathBuf>> {
+    let Some(script_path) = find_script_path(project_dir, command_name) else {
+        return Ok(None);
+    };
+
+    if get_override(project_dir, &script_path) {
+        return Ok(Some(script_path));
+    }
+
+    match prompt_provider.resolve(command_name)? {
+        ClashChoice::Custom => Ok(Some(script_path)),
+        ClashChoice::Builtin => Ok(None),
+    }
+}
+
+/// Locates the subcommand token in raw argv and everything typed after it, before any
+/// clap parsing happens. `--dir`/`-d` (which always precede the subcommand and always
+/// take a value, in either `--dir value` or `--dir=value` form) are skipped explicitly;
+/// any other flag in `global_flags` is treated as a global toggle for `docker-control`
+/// itself and stripped out wherever it appears (clap's `global = true` args are valid
+/// both before and after the subcommand). Returns `None` if no subcommand token is
+/// found (e.g. only global flags were given).
+pub fn split_leading_subcommand(
+    args: &[String],
+    global_flags: &[String],
+) -> Option<(String, Vec<String>)> {
+    let mut i = 1; // skip binary name
+    while i < args.len() {
+        let token = args[i].as_str();
+        if token == "--dir" || token == "-d" {
+            i += 2;
+            continue;
+        }
+        if token.starts_with("--dir=") || token.starts_with("-d=") {
+            i += 1;
+            continue;
+        }
+        if global_flags.iter().any(|flag| flag == token) {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+
+    let name = args.get(i)?.clone();
+    let trailing = args[i + 1..]
+        .iter()
+        .filter(|token| !global_flags.iter().any(|flag| flag == token.as_str()))
+        .cloned()
+        .collect();
+
+    Some((name, trailing))
 }
 
 pub fn get_custom_commands(project_dir: &Path) -> Vec<CustomCommand> {
