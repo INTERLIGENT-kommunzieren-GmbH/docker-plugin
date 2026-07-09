@@ -186,7 +186,7 @@ fn dependency_exists(dep: &Dependency) -> bool {
 }
 
 /// Whether Homebrew is the expected/standard package manager on this platform.
-fn is_brew_eligible(platform: &Platform) -> bool {
+pub(crate) fn is_brew_eligible(platform: &Platform) -> bool {
     matches!(platform, Platform::Macos | Platform::NativeLinux(_))
 }
 

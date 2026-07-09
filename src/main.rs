@@ -4,6 +4,7 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use daemonize::Daemonize;
 use inquire::Confirm;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use tokio::signal;
 
@@ -464,6 +465,11 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
 
+    // Runs after the custom-script clash resolution above (which can dispatch a
+    // custom script and return early) so a self-upgrade prompt never interrupts
+    // running a custom script.
+    maybe_offer_self_upgrade();
+
     let matches = cmd.try_get_matches()?;
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
@@ -707,6 +713,31 @@ fn check_managed(project_dir: &std::path::Path) {
             project_dir
         ));
         std::process::exit(1);
+    }
+}
+
+/// Best-effort, throttled-to-weekly check of whether docker-control itself
+/// has a newer Homebrew release available, offering to run the existing
+/// `upgrade` command. No-op when stdin isn't a terminal, so unattended/CI
+/// runs never block on a prompt.
+fn maybe_offer_self_upgrade() {
+    maybe_offer_self_upgrade_with(&commands::upgrade::InteractiveUpgradePromptProvider)
+}
+
+fn maybe_offer_self_upgrade_with(prompt: &dyn commands::upgrade::UpgradePromptProvider) {
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
+
+    let Some(true) = commands::upgrade::check_outdated() else {
+        return;
+    };
+
+    ui::warning("A newer version of docker-control is available.");
+    if prompt.confirm_upgrade() {
+        if let Err(e) = commands::upgrade::execute() {
+            ui::warning(format!("Failed to upgrade docker-control: {}", e));
+        }
     }
 }
 

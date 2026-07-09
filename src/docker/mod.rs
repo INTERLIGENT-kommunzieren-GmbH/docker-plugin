@@ -1,7 +1,8 @@
 use crate::ui;
-use crate::utils::platform;
+use crate::utils::{platform, throttle_cache};
 use anyhow::{Context, Result, anyhow};
 use bollard::Docker;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -142,12 +143,24 @@ pub struct ImageStatus {
     pub outdated: bool,
 }
 
+/// Minimum time between registry checks for a given project. The check hits
+/// the network for every image, so it's throttled rather than run on every
+/// start/restart.
+const IMAGE_CHECK_INTERVAL: chrono::Duration = chrono::Duration::days(7);
+
 /// Best-effort check of whether the images referenced by the project's compose
 /// file are stale compared to the registry. Never fails: any error along the
 /// way (offline, missing buildx, locally-built image, etc.) just causes that
 /// image to be skipped rather than aborting the check.
 pub fn check_outdated_images(project_dir: &Path) -> Vec<ImageStatus> {
     if std::env::var("DOCKER_CONTROL_SKIP_IMAGE_CHECK").is_ok() {
+        return Vec::new();
+    }
+
+    let cache_path = image_check_cache_path(project_dir);
+
+    if !throttle_cache::is_due(cache_path.as_deref(), IMAGE_CHECK_INTERVAL) {
+        ui::debug("Skipping image update check (last checked within the past week)".to_string());
         return Vec::new();
     }
 
@@ -159,12 +172,46 @@ pub fn check_outdated_images(project_dir: &Path) -> Vec<ImageStatus> {
         }
     };
 
-    images
+    // Whether any image was actually checked against the registry, as
+    // opposed to every image coming back `None` (offline, no buildx,
+    // etc.). Only a check that reached the registry at least once counts
+    // as "done" for throttling purposes — otherwise a single offline run
+    // would silently suppress the real check for a week.
+    let mut checked_any = false;
+    let statuses: Vec<ImageStatus> = images
         .into_iter()
         .filter_map(|image| {
-            check_image_outdated(&image).map(|outdated| ImageStatus { image, outdated })
+            let outdated = check_image_outdated(&image);
+            checked_any |= outdated.is_some();
+            outdated.map(|outdated| ImageStatus { image, outdated })
         })
-        .collect()
+        .collect();
+
+    if checked_any {
+        throttle_cache::record(cache_path.as_deref());
+    }
+
+    statuses
+}
+
+/// Cache file recording when a project's images were last checked against
+/// the registry, so the (network-bound) check can be throttled to once a
+/// week per project. Lives in the OS config dir, keyed by a hash of the
+/// project's canonicalized path, since it's local machine state and
+/// shouldn't be committed alongside the project.
+fn image_check_cache_path(project_dir: &Path) -> Option<PathBuf> {
+    let proj_dirs = directories::ProjectDirs::from("com", "interligent", "docker-control")?;
+    let canonical = project_dir
+        .canonicalize()
+        .unwrap_or_else(|_| project_dir.to_path_buf());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    Some(
+        proj_dirs
+            .config_dir()
+            .join("image-check-cache")
+            .join(format!("{:016x}.json", hasher.finish())),
+    )
 }
 
 fn list_compose_images(project_dir: &Path) -> Result<Vec<String>> {
