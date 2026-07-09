@@ -130,6 +130,8 @@ enum Commands {
     Stop,
     /// Stop the ingress containers
     StopIngress,
+    /// Trust the ingress CA certificate on this host
+    TrustCa,
     /// Migrate from old docker-control project
     #[command(hide = true)]
     Migrate,
@@ -400,6 +402,30 @@ async fn async_main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Apply --debug, dependency checks, and asset init before the clash-resolution
+    // block below (which can dispatch a custom script and return early) so every path
+    // gets the same setup a normal built-in dispatch gets.
+    if args.iter().any(|arg| arg == "--debug") {
+        ui::set_debug(true);
+    }
+
+    if std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
+        utils::dependencies::check_dependencies()?;
+    }
+
+    if let Ok(asset_manager) = assets::AssetManager::new() {
+        if let Err(e) = asset_manager.ensure_assets() {
+            ui::warning(format!(
+                "Failed to ensure assets: {}. Falling back to local/env paths.",
+                e
+            ));
+        }
+    }
+
+    // Built once and reused below for the clash check and the real parse, instead of
+    // re-deriving the whole subcommand/arg tree from scratch multiple times.
+    let cmd = Cli::command().styles(get_help_styles());
+
     // Resolve a name clash between a built-in command and a same-named custom script
     // BEFORE clap validates the built-in's own argument schema, so the clash check
     // isn't blocked by a strict built-in (e.g. `Console`, `Deploy`) rejecting args that
@@ -407,14 +433,19 @@ async fn async_main() -> anyhow::Result<()> {
     // args itself, so waiting until after parsing would make this feature unusable for
     // every other built-in whenever extra/unrecognized args are passed.
     if let Some((subcommand_name, trailing_args)) =
-        commands::custom::split_leading_subcommand(&args, &global_flag_tokens())
+        commands::custom::split_leading_subcommand(&args, &global_flag_tokens(&cmd))
     {
-        let is_builtin = Cli::command().get_subcommands().any(|sub| {
-            sub.get_name() == subcommand_name
-                || sub.get_all_aliases().any(|alias| alias == subcommand_name)
-        });
+        // Resolve to the subcommand's canonical name so an alias is gated the same way
+        // invoking it by its real name would be.
+        let canonical_name = cmd
+            .get_subcommands()
+            .find(|sub| {
+                sub.get_name() == subcommand_name
+                    || sub.get_all_aliases().any(|alias| alias == subcommand_name)
+            })
+            .map(|sub| sub.get_name().to_string());
 
-        if is_builtin {
+        if let Some(canonical_name) = canonical_name {
             if let Some(script_path) = commands::custom::resolve_clash(
                 &project_dir,
                 &subcommand_name,
@@ -423,7 +454,7 @@ async fn async_main() -> anyhow::Result<()> {
                 // Mirror the managed-project gate the built-in itself would have
                 // enforced; keep this list in sync with the `check_managed` calls in
                 // the match arms below.
-                if command_requires_managed_project(&subcommand_name) {
+                if command_requires_managed_project(&canonical_name) {
                     check_managed(&project_dir);
                 }
                 ui::info(format!("Executing custom script: {:?}", script_path));
@@ -433,28 +464,8 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
 
-    let cmd = Cli::command().styles(get_help_styles());
     let matches = cmd.try_get_matches()?;
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
-
-    if cli.debug {
-        ui::set_debug(true);
-    }
-
-    // Check external dependencies
-    if std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
-        utils::dependencies::check_dependencies()?;
-    }
-
-    // Initialize assets
-    if let Ok(asset_manager) = assets::AssetManager::new() {
-        if let Err(e) = asset_manager.ensure_assets() {
-            ui::warning(format!(
-                "Failed to ensure assets: {}. Falling back to local/env paths.",
-                e
-            ));
-        }
-    }
 
     let project_dir = cli
         .dir
@@ -623,6 +634,9 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::StopIngress => {
             docker::execute_ingress_compose(&["down"])?;
         }
+        Commands::TrustCa => {
+            commands::trust_ca::execute()?;
+        }
         Commands::Migrate => {
             commands::migrate::execute(&project_dir).await?;
         }
@@ -670,9 +684,8 @@ fn command_requires_managed_project(name: &str) -> bool {
 
 /// The long/short flag tokens for every `global = true` argument on `Cli`, derived
 /// from clap itself so this can't silently drift out of sync with the `Cli` struct.
-fn global_flag_tokens() -> Vec<String> {
-    Cli::command()
-        .get_arguments()
+fn global_flag_tokens(cmd: &clap::Command) -> Vec<String> {
+    cmd.get_arguments()
         .filter(|arg| arg.is_global_set())
         .flat_map(|arg| {
             let mut tokens = Vec::new();

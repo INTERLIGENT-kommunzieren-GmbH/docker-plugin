@@ -41,6 +41,24 @@ pub fn execute_compose(project_dir: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Resolves `HOMEBREW_PREFIX`: env var → `brew --prefix` → `/usr/local` fallback.
+pub fn resolve_brew_prefix() -> String {
+    std::env::var("HOMEBREW_PREFIX")
+        .ok()
+        .or_else(platform::get_brew_prefix)
+        .unwrap_or_else(|| "/usr/local".to_string())
+}
+
+/// Host path where the ingress companion writes the CA and per-domain certs.
+pub fn ingress_tls_dir() -> PathBuf {
+    PathBuf::from(resolve_brew_prefix())
+        .join("etc")
+        .join("docker-control")
+        .join("ingress")
+        .join("volumes")
+        .join("tls")
+}
+
 pub fn execute_ingress_compose(args: &[&str]) -> Result<()> {
     let ingress_dir = find_ingress_dir()?;
     let compose_file = ingress_dir.join("compose.yml");
@@ -52,10 +70,7 @@ pub fn execute_ingress_compose(args: &[&str]) -> Result<()> {
         ));
     }
 
-    let brew_prefix = std::env::var("HOMEBREW_PREFIX")
-        .ok()
-        .or_else(platform::get_brew_prefix)
-        .unwrap_or_else(|| "/usr/local".to_string());
+    let brew_prefix = resolve_brew_prefix();
 
     ui::debug(format!("Using HOMEBREW_PREFIX: {}", brew_prefix));
 

@@ -5,6 +5,7 @@ pub mod acl;
 pub mod dependencies;
 pub mod forwarding;
 pub mod platform;
+pub mod sudo;
 
 pub fn stop_ssh_agent() -> Result<()> {
     let pid_file = "/tmp/docker-control-ssh-agent.pid";

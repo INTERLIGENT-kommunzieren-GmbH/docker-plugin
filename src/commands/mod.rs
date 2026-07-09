@@ -9,5 +9,6 @@ pub mod migrate;
 pub mod release;
 pub mod show_running;
 pub mod status;
+pub mod trust_ca;
 pub mod update;
 pub mod upgrade;

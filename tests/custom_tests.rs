@@ -150,10 +150,7 @@ struct MockClashPromptProvider {
 
 impl ClashPromptProvider for MockClashPromptProvider {
     fn resolve(&self, _command_name: &str) -> anyhow::Result<ClashChoice> {
-        Ok(match &self.choice {
-            ClashChoice::Custom => ClashChoice::Custom,
-            ClashChoice::Builtin => ClashChoice::Builtin,
-        })
+        Ok(self.choice)
     }
 }
 

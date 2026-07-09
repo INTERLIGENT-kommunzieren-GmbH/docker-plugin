@@ -1,6 +1,6 @@
 use crate::docker;
 use crate::ui;
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
 
@@ -58,21 +58,15 @@ pub fn apply_container_acl(project_dir: &Path) -> Result<()> {
 }
 
 fn run_sudo_setfacl(project_dir: &Path, entry: &str, default_acl: bool) -> Result<()> {
-    let mut cmd = Command::new("sudo");
-    cmd.arg("setfacl").arg("-R");
+    let mut args = vec!["setfacl", "-R"];
     if default_acl {
-        cmd.arg("-d");
+        args.push("-d");
     }
-    cmd.arg("-m")
-        .arg(entry)
-        .arg("htdocs")
-        .current_dir(project_dir);
+    args.push("-m");
+    args.push(entry);
+    args.push("htdocs");
 
-    let status = cmd.status().context("Failed to execute sudo setfacl")?;
-    if !status.success() {
-        return Err(anyhow!("sudo setfacl failed with status {}", status));
-    }
-    Ok(())
+    crate::utils::sudo::run_in(Some(project_dir), &args)
 }
 
 fn run_container_setfacl(project_dir: &Path, entry: &str, default_acl: bool) -> Result<()> {

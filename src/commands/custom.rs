@@ -49,13 +49,16 @@ pub fn run_script(project_dir: &Path, script_path: &Path, args: &[String]) -> Re
 }
 
 /// Mirrors `_desc_`: a script opts into overriding a same-named built-in command by
-/// printing "true" when invoked with `_override_` as its first argument. Scripts that
-/// don't reference `_override_` at all (e.g. ones written before this feature existed)
-/// are never invoked, so they can't be triggered into running their real body just by
-/// being probed.
+/// printing "true" when invoked with `_override_` as its first argument. As a guard
+/// against invoking scripts written before this feature existed, we only probe scripts
+/// that contain a quoted `_override_` (as the convention's `"$1" == "_override_"` check
+/// would produce) rather than any occurrence of the bare word, which could appear
+/// incidentally in a comment or description and would otherwise cause the script's
+/// real body to run as a side effect of the probe.
 pub fn get_override(project_dir: &Path, path: &Path) -> bool {
     match fs::read_to_string(path) {
-        Ok(contents) if contents.contains("_override_") => {}
+        Ok(contents)
+            if contents.contains("\"_override_\"") || contents.contains("'_override_'") => {}
         _ => return false,
     }
 
@@ -71,6 +74,7 @@ pub fn get_override(project_dir: &Path, path: &Path) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ClashChoice {
     Builtin,
     Custom,
