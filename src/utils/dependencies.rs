@@ -114,7 +114,8 @@ const DEPENDENCIES: &[Dependency] = &[
         args: &["--version"],
         critical: false,
         description: "Required for granting the host user and the container's www-data user access to htdocs",
-        // Linux ACL tooling, no reliable formula, especially on macOS.
+        // Linux-only ACL tooling; macOS falls back to `chmod +a` and skips this
+        // check entirely. No reliable Homebrew formula either way.
         brew_formula: None,
     },
     Dependency {
@@ -274,7 +275,14 @@ pub fn check_dependencies() -> Result<()> {
     let mut missing_critical = Vec::new();
     let mut missing_optional = Vec::new();
 
+    // macOS has neither `setfacl` nor `getfacl`; the ACL logic falls back to
+    // `chmod`/`ls`, which ship with the OS, so don't check for the Linux tools.
+    let skip_acl_tools = cfg!(target_os = "macos");
+
     for dep in DEPENDENCIES {
+        if skip_acl_tools && matches!(dep.command, "setfacl" | "getfacl") {
+            continue;
+        }
         if !dependency_exists(dep) {
             if dep.critical {
                 missing_critical.push(dep);
