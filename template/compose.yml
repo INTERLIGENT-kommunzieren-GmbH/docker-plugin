@@ -12,7 +12,7 @@ services:
       MARIADB_USER_FILE: /run/secrets/db_user
       MARIADB_PASSWORD_FILE: /run/secrets/db_pw
       MARIADB_DATABASE_FILE: /run/secrets/db_name
-    image: mariadb:lts
+    image: mariadb:11.8
     networks:
       - "backend-tier"
     ports:
@@ -74,7 +74,7 @@ services:
       com.interligent.dockerplugin.service: "gotenberg"
       com.interligent.dockerplugin.dir: "${PWD}"
       com.interligent.dockerplugin.project: "${PROJECTNAME}"
-    image: gotenberg/gotenberg
+    image: gotenberg/gotenberg:8-chromium
     command: [ 'gotenberg', '--api-timeout', '300s', '--chromium-allow-file-access-from-files', '--chromium-disable-web-security', '--chromium-ignore-certificate-errors' ]
     deploy:
       restart_policy:
