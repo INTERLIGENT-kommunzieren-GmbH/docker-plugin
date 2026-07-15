@@ -309,6 +309,67 @@ fn maybe_offer_brew_install(
     missing_optional.retain(|dep| dep.brew_formula.is_none() || still_missing.contains(dep.name));
 }
 
+/// Installs every dependency that has a Homebrew formula (critical *and* optional)
+/// via a single `brew install`. Invoked by the `install-deps` command.
+///
+/// `brew install` is idempotent, so already-present formulas are simply skipped by
+/// Homebrew. This tool is itself distributed via Homebrew, so `brew` is expected to be
+/// present regardless of the detected platform; we still error out (rather than silently
+/// no-op'ing) if it can't be found, so the user gets an actionable message.
+pub fn install_brew_dependencies() -> Result<()> {
+    if platform::get_brew_prefix().is_none() {
+        return Err(anyhow!(
+            "Homebrew is not installed. Install it from https://brew.sh and try again."
+        ));
+    }
+
+    // Every dependency that Homebrew can reliably provide, critical and optional alike.
+    // setfacl/getfacl/SSH/SCP/Docker/etc. carry no `brew_formula` and are filtered out.
+    let installable: Vec<&'static Dependency> = DEPENDENCIES
+        .iter()
+        .filter(|dep| dep.brew_formula.is_some())
+        .collect();
+
+    if installable.is_empty() {
+        ui::info("No Homebrew-installable dependencies are defined.");
+        return Ok(());
+    }
+
+    let formulas = dedup_formulas(&installable);
+    ui::info(format!(
+        "Installing {} Homebrew formula(s): {}",
+        formulas.len(),
+        formulas.join(", ")
+    ));
+
+    if !run_brew_install(&formulas) {
+        return Err(anyhow!(
+            "`brew install {}` failed; see the output above.",
+            formulas.join(" ")
+        ));
+    }
+
+    // Report anything Homebrew claimed to install but that still isn't on PATH
+    // (e.g. a keg-only formula), so the user isn't left with a false success.
+    let still_missing: Vec<&str> = installable
+        .iter()
+        .filter(|dep| !dependency_exists(dep))
+        .map(|dep| dep.name)
+        .collect();
+
+    if still_missing.is_empty() {
+        ui::success("All Homebrew-installable dependencies are present.");
+    } else {
+        ui::warning(format!(
+            "These dependencies are still missing after installation and may need manual \
+             setup: {}",
+            still_missing.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn check_dependencies() -> Result<()> {
     // ui::debug("Checking external CLI dependencies...");
     let mut missing_critical = Vec::new();

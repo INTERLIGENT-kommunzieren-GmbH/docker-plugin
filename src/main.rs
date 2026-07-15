@@ -96,6 +96,8 @@ enum Commands {
     },
     /// Initialize an empty directory with the project template
     Init,
+    /// Install all Homebrew-installable dependencies, including optional ones
+    InstallDeps,
     /// Merge release branch to main using selective cherry-pick workflow
     Merge {
         /// Optional module name
@@ -253,6 +255,7 @@ fn main() {
             || a == "-V"
             || a == "docker-cli-plugin-metadata"
             || a == "upgrade"
+            || a == "install-deps"
     });
     if !no_ssh_needed && std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
         let platform_info = utils::platform::detect_platform();
@@ -410,7 +413,10 @@ async fn async_main() -> anyhow::Result<()> {
         ui::set_debug(true);
     }
 
-    if std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
+    // `install-deps` exists precisely to install missing dependencies, so it must not be
+    // gated behind the dependency check that would abort on the very deps it installs.
+    let is_install_deps = args.iter().any(|a| a == "install-deps");
+    if !is_install_deps && std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
         utils::dependencies::check_dependencies()?;
     }
 
@@ -537,6 +543,9 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Init => {
             commands::init::execute(&project_dir).await?;
+        }
+        Commands::InstallDeps => {
+            commands::install_deps::execute()?;
         }
         Commands::Merge { module } => {
             commands::merge::execute(
