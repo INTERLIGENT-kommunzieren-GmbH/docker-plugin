@@ -139,7 +139,11 @@ enum Commands {
     #[command(hide = true)]
     Migrate,
     /// Update the project with the current template
-    Update,
+    Update {
+        /// Skip the confirmation prompt (required for non-interactive use)
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Upgrade docker-control itself via Homebrew
     Upgrade,
     /// Return metadata for Docker CLI plugin
@@ -655,9 +659,9 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Migrate => {
             commands::migrate::execute(&project_dir).await?;
         }
-        Commands::Update => {
+        Commands::Update { yes } => {
             check_managed(&project_dir);
-            commands::update::execute(&project_dir)?;
+            commands::update::execute(&project_dir, yes)?;
         }
         Commands::Upgrade => {
             commands::upgrade::execute()?;

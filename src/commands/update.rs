@@ -2,13 +2,68 @@ use crate::assets::AssetManager;
 use crate::docker;
 use crate::ui;
 use crate::utils;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-pub fn execute(project_dir: &Path) -> Result<()> {
+/// Abstracts the "update the project?" confirmation so tests can inject a fixed
+/// answer instead of blocking on a real prompt, matching the
+/// `UpgradePromptProvider`/`MergePromptProvider` pattern used elsewhere in this
+/// codebase for interactive `inquire` prompts.
+pub trait UpdatePromptProvider {
+    fn confirm_update(&self) -> bool;
+}
+
+pub struct InteractiveUpdatePromptProvider;
+
+impl UpdatePromptProvider for InteractiveUpdatePromptProvider {
+    fn confirm_update(&self) -> bool {
+        inquire::Confirm::new("Continue updating THIS PROJECT from the template?")
+            // Safe default: don't rewrite the project unless the user opts in.
+            .with_default(false)
+            .prompt()
+            .unwrap_or(false)
+    }
+}
+
+/// Decide whether to proceed with the destructive project update. `yes`
+/// bypasses the prompt entirely; otherwise an interactive terminal is warned
+/// (naming `upgrade` as the likely intended command) and prompted, while a
+/// non-interactive run is refused so scripts/CI can't silently rewrite a
+/// project. Pure (no filesystem work) so the decision matrix is unit-testable.
+fn confirm_or_abort(
+    yes: bool,
+    is_interactive: bool,
+    prompt: &dyn UpdatePromptProvider,
+) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !is_interactive {
+        bail!(
+            "refusing to rewrite the project non-interactively. \
+             Re-run with --yes to confirm. \
+             (To upgrade docker-control itself, run `upgrade`.)"
+        );
+    }
+    ui::warning("This rewrites THIS PROJECT's files from the template (a backup is created).");
+    ui::info("To upgrade docker-control itself instead, run `upgrade`.");
+    Ok(prompt.confirm_update())
+}
+
+pub fn execute(project_dir: &Path, yes: bool) -> Result<()> {
+    let is_interactive = std::io::stdin().is_terminal();
+    if !confirm_or_abort(yes, is_interactive, &InteractiveUpdatePromptProvider)? {
+        ui::info("Update cancelled.");
+        return Ok(());
+    }
+    apply_template_update(project_dir)
+}
+
+fn apply_template_update(project_dir: &Path) -> Result<()> {
     ui::info("Updating project with latest template...");
 
     let was_running = docker::is_running(project_dir);
@@ -120,4 +175,36 @@ fn copy_recursive(src: &Path, dst: &Path, excludes: &[&str], is_backup: bool) ->
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockPrompt(bool);
+    impl UpdatePromptProvider for MockPrompt {
+        fn confirm_update(&self) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn yes_flag_proceeds_without_consulting_prompt() {
+        // A prompt that would say "no" must be ignored when --yes is set,
+        // regardless of interactivity.
+        assert!(confirm_or_abort(true, true, &MockPrompt(false)).unwrap());
+        assert!(confirm_or_abort(true, false, &MockPrompt(false)).unwrap());
+    }
+
+    #[test]
+    fn non_interactive_without_yes_is_refused() {
+        let err = confirm_or_abort(false, false, &MockPrompt(true)).unwrap_err();
+        assert!(err.to_string().contains("--yes"));
+    }
+
+    #[test]
+    fn interactive_follows_prompt_answer() {
+        assert!(confirm_or_abort(false, true, &MockPrompt(true)).unwrap());
+        assert!(!confirm_or_abort(false, true, &MockPrompt(false)).unwrap());
+    }
 }
