@@ -8,7 +8,7 @@ use std::process::Command;
 
 /// Commands whose own `--version`/no-arg invocation may exit non-zero, so
 /// presence is checked via `which` instead.
-const CHECK_VIA_WHICH: &[&str] = &["scp", "7z", "getfacl"];
+const CHECK_VIA_WHICH: &[&str] = &["scp", "7z", "getfacl", "certutil"];
 
 // Minimum versions required by the current compose templates.
 // Docker 20.10: needed for `host-gateway` in extra_hosts.
@@ -126,6 +126,16 @@ const DEPENDENCIES: &[Dependency] = &[
         description: "Required for detecting existing ACLs on htdocs before re-applying them",
         brew_formula: None,
     },
+    Dependency {
+        name: "certutil",
+        command: "certutil",
+        args: &[], // `certutil` with no args exits non-zero; presence is checked via `which`.
+        critical: false,
+        description: "Used by `trust-ca` to add the ingress CA to the Chrome/Chromium and \
+                      Firefox trust stores",
+        // The `nss` formula is not keg-only, so `certutil` lands on PATH.
+        brew_formula: Some("nss"),
+    },
 ];
 
 /// Parse the first `MAJOR.MINOR` pair found in a version string like
@@ -204,6 +214,40 @@ fn dedup_formulas(deps: &[&Dependency]) -> Vec<&'static str> {
     formulas
 }
 
+/// Whether an interactive Homebrew prompt can be shown right now: Homebrew is the
+/// platform's package manager and stdin is a terminal (so unattended/CI runs never
+/// block on a prompt).
+fn can_prompt_brew(platform: &Platform) -> bool {
+    is_brew_eligible(platform) && std::io::stdin().is_terminal()
+}
+
+/// Runs `brew install <formulas>` and reports whether it succeeded.
+fn run_brew_install(formulas: &[&str]) -> bool {
+    matches!(
+        Command::new("brew").arg("install").args(formulas).status(),
+        Ok(s) if s.success()
+    )
+}
+
+/// Interactively offers to `brew install <formula>` for a single formula — used when a
+/// command discovers at runtime that it needs an optional tool (e.g. `trust-ca` needing
+/// `certutil` from `nss`). `platform` is the already-detected platform, so this does not
+/// re-run platform detection. Returns `true` only when `brew install` ran and succeeded.
+/// No-op returning `false` when Homebrew isn't the platform's package manager, stdin
+/// isn't a terminal, or Homebrew isn't installed.
+pub fn offer_brew_install(formula: &str, platform: &Platform) -> bool {
+    if !can_prompt_brew(platform) || platform::get_brew_prefix().is_none() {
+        return false;
+    }
+
+    let should_install = Confirm::new(&format!("Install `{}` via Homebrew now?", formula))
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false);
+
+    should_install && run_brew_install(&[formula])
+}
+
 /// Offers to `brew install` any missing dependency that has a `brew_formula`,
 /// removing newly-installed ones from `missing_critical`/`missing_optional`.
 /// No-op on platforms where Homebrew isn't the standard tool, when nothing
@@ -214,7 +258,7 @@ fn maybe_offer_brew_install(
     missing_critical: &mut Vec<&'static Dependency>,
     missing_optional: &mut Vec<&'static Dependency>,
 ) {
-    if !is_brew_eligible(&platform::detect_platform().platform) {
+    if !can_prompt_brew(&platform::detect_platform().platform) {
         return;
     }
 
@@ -225,10 +269,6 @@ fn maybe_offer_brew_install(
         .filter(|dep| dep.brew_formula.is_some())
         .collect();
     if installable.is_empty() {
-        return;
-    }
-
-    if !std::io::stdin().is_terminal() {
         return;
     }
 
@@ -252,8 +292,7 @@ fn maybe_offer_brew_install(
     }
 
     let formulas = dedup_formulas(&installable);
-    let status = Command::new("brew").arg("install").args(&formulas).status();
-    if !matches!(status, Ok(s) if s.success()) {
+    if !run_brew_install(&formulas) {
         ui::warning(
             "Homebrew install failed; see output above. Falling back to manual install instructions.",
         );
@@ -278,9 +317,16 @@ pub fn check_dependencies() -> Result<()> {
     // macOS has neither `setfacl` nor `getfacl`; the ACL logic falls back to
     // `chmod`/`ls`, which ship with the OS, so don't check for the Linux tools.
     let skip_acl_tools = cfg!(target_os = "macos");
+    // `trust-ca` only uses certutil (from `nss`) on macOS/Linux via Homebrew; on Windows
+    // there's no such path, and `which` may be absent, so the probe would falsely report
+    // certutil missing on every command. Skip it there.
+    let skip_certutil = cfg!(target_os = "windows");
 
     for dep in DEPENDENCIES {
         if skip_acl_tools && matches!(dep.command, "setfacl" | "getfacl") {
+            continue;
+        }
+        if skip_certutil && dep.command == "certutil" {
             continue;
         }
         if !dependency_exists(dep) {
@@ -378,6 +424,8 @@ mod tests {
         assert!(installable.contains(&"Bash"));
         assert!(installable.contains(&"Rsync"));
         assert!(installable.contains(&"7-Zip"));
+        // certutil is installable via the (non-keg-only) `nss` formula.
+        assert!(installable.contains(&"certutil"));
         // SSH/SCP are excluded: Homebrew's `openssh` formula is keg-only, so
         // installing it wouldn't reliably satisfy the check.
         assert!(!installable.contains(&"SSH"));
@@ -422,5 +470,21 @@ mod tests {
     #[test]
     fn getfacl_is_checked_via_which() {
         assert!(CHECK_VIA_WHICH.contains(&"getfacl"));
+    }
+
+    #[test]
+    fn certutil_is_checked_via_which() {
+        // `certutil` with no args exits non-zero, so presence must be probed via `which`.
+        assert!(CHECK_VIA_WHICH.contains(&"certutil"));
+    }
+
+    #[test]
+    fn certutil_maps_to_nss_formula() {
+        let certutil = DEPENDENCIES
+            .iter()
+            .find(|d| d.command == "certutil")
+            .expect("certutil dependency present");
+        assert_eq!(certutil.brew_formula, Some("nss"));
+        assert!(!certutil.critical);
     }
 }

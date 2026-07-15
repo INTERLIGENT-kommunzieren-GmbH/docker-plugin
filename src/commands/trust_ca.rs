@@ -1,5 +1,6 @@
 use crate::docker;
 use crate::ui;
+use crate::utils::dependencies;
 use crate::utils::platform::{self, Platform};
 use crate::utils::sudo;
 use anyhow::{Context, Result, anyhow};
@@ -36,17 +37,22 @@ pub fn execute() -> Result<()> {
         Platform::DockerDesktop if is_windows_host => install_windows_trust(&ca_path)?,
         Platform::NativeLinux(_) | Platform::DockerDesktop => {
             install_linux_system_trust(&ca_path)?;
-            install_nss_trust(&ca_path);
         }
         Platform::Wsl => {
             install_linux_system_trust(&ca_path)?;
-            install_nss_trust(&ca_path);
             install_windows_trust_from_wsl(&ca_path);
         }
         Platform::Windows => install_windows_trust(&ca_path)?,
         Platform::Unknown => {
             return Err(anyhow!("Unsupported platform for CA trust installation."));
         }
+    }
+
+    // Browser NSS trust (Chrome/Chromium + Firefox) is done via certutil and Homebrew,
+    // neither of which applies on a Windows host, so skip it there. `is_windows_host`
+    // also covers the DockerDesktop-on-Windows and native `Platform::Windows` cases.
+    if !is_windows_host {
+        install_browser_trust(&ca_path, &platform_info.platform);
     }
 
     ui::success("CA certificate trusted. Restart your browser for the change to take effect.");
@@ -75,11 +81,39 @@ fn install_macos_trust(ca_path: &Path) -> Result<()> {
 }
 
 fn command_exists(name: &str) -> bool {
+    // `.output()` (not `.status()`) so `which`'s "no <name> in ..." stderr is captured
+    // and discarded rather than leaking to the console.
     Command::new("which")
         .arg(name)
-        .status()
-        .map(|s| s.success())
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Ensures `certutil` is available for the browser NSS imports, offering a Homebrew
+/// install of `nss` if it's missing. Resolved once per run so users aren't prompted
+/// repeatedly. `platform` is the already-detected platform (avoids re-detecting).
+/// Returns `true` if `certutil` can be used. Never fails the command — callers just
+/// skip the import.
+fn ensure_certutil(platform: &Platform) -> bool {
+    if command_exists("certutil") {
+        return true;
+    }
+
+    ui::warning(
+        "certutil is required to add the CA to the Chrome/Chromium and Firefox trust \
+         stores, but it is not installed.",
+    );
+
+    if dependencies::offer_brew_install("nss", platform) && command_exists("certutil") {
+        return true;
+    }
+
+    ui::warning(
+        "Skipping browser trust import. Install certutil with `brew install nss` and \
+         re-run `docker-control trust-ca`.",
+    );
+    false
 }
 
 /// True if `anchor` already exists and has the same content as `ca_path`, so the sudo
@@ -147,48 +181,162 @@ fn install_linux_anchor(
     sudo::run(&["sh", "-c", &script, "--", &ca_str, anchor])
 }
 
-/// Best-effort NSS trust store install so Chrome/Chromium (which don't read the
-/// system CA bundle on Linux) also trust the CA. Never fails the command.
-fn install_nss_trust(ca_path: &Path) {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
+/// Idempotent import of the CA into a single NSS DB (`db_arg` is e.g. `sql:<dir>`).
+/// Deletes any existing entry under `NSS_NICKNAME` first so repeat runs don't fail,
+/// then adds the CA as a trusted root. Returns the status of the add command.
+fn nss_import(db_arg: &str, ca_path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    // Ignore failure: nothing to delete on first run. `.output()` captures certutil's
+    // "could not find certificate" stderr so it doesn't alarm the user on a clean import.
+    let _ = Command::new("certutil")
+        .args(["-d", db_arg, "-D", "-n", NSS_NICKNAME])
+        .output();
 
+    Command::new("certutil")
+        .args(["-d", db_arg, "-A", "-t", "C,,", "-n", NSS_NICKNAME, "-i"])
+        .arg(ca_path)
+        .status()
+}
+
+/// The shared Chrome/Chromium NSS database (`~/.pki/nssdb`), if it exists.
+fn chromium_nssdb_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
     let nssdb = PathBuf::from(home).join(".pki").join("nssdb");
-    if !nssdb.exists() {
-        ui::debug("No NSS database found at ~/.pki/nssdb, skipping browser trust store import.");
-        return;
+    nssdb.exists().then_some(nssdb)
+}
+
+/// Candidate Firefox profile-parent directories for the current OS and the common
+/// install types (native, Flatpak, Snap). Non-existent paths are filtered later.
+fn firefox_profile_parents() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+
+    match std::env::consts::OS {
+        "macos" => {
+            if let Some(home) = std::env::var_os("HOME") {
+                parents.push(
+                    PathBuf::from(home)
+                        .join("Library")
+                        .join("Application Support")
+                        .join("Firefox")
+                        .join("Profiles"),
+                );
+            }
+        }
+        "windows" => {
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                parents.push(
+                    PathBuf::from(appdata)
+                        .join("Mozilla")
+                        .join("Firefox")
+                        .join("Profiles"),
+                );
+            }
+        }
+        _ => {
+            // Linux / WSL: native, Flatpak, and Snap install layouts.
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                parents.push(home.join(".mozilla").join("firefox"));
+                parents.push(
+                    home.join(".var")
+                        .join("app")
+                        .join("org.mozilla.firefox")
+                        .join(".mozilla")
+                        .join("firefox"),
+                );
+                parents.push(
+                    home.join("snap")
+                        .join("firefox")
+                        .join("common")
+                        .join(".mozilla")
+                        .join("firefox"),
+                );
+            }
+        }
     }
 
-    if !command_exists("certutil") {
+    parents
+}
+
+/// Subdirectories of `parents` that contain a `cert9.db` (an initialised Firefox
+/// profile using the modern SQLite NSS database).
+fn firefox_profiles_with_db(parents: &[PathBuf]) -> Vec<PathBuf> {
+    let mut profiles = Vec::new();
+
+    for parent in parents {
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.join("cert9.db").exists() {
+                profiles.push(path);
+            }
+        }
+    }
+
+    profiles
+}
+
+/// Best-effort import of the CA into the browser NSS trust stores that don't read the
+/// system CA bundle: the shared Chrome/Chromium database (`~/.pki/nssdb`) and every
+/// discoverable Firefox profile. `certutil` is resolved once — and only when there is at
+/// least one NSS store to update, so users without these browsers are never prompted.
+/// Never fails the command.
+fn install_browser_trust(ca_path: &Path, platform: &Platform) {
+    let chromium_nssdb = chromium_nssdb_path();
+    let firefox_profiles = firefox_profiles_with_db(&firefox_profile_parents());
+
+    if chromium_nssdb.is_none() && firefox_profiles.is_empty() {
         ui::debug(
-            "certutil not found (install libnss3-tools/nss-tools), skipping NSS trust store import.",
+            "No Chrome/Chromium or Firefox NSS databases found, skipping browser trust import.",
         );
         return;
     }
 
-    let db_arg = format!("sql:{}", nssdb.display());
+    if !ensure_certutil(platform) {
+        return;
+    }
 
-    // Ignore failure: nothing to delete on first run.
-    let _ = Command::new("certutil")
-        .args(["-d", &db_arg, "-D", "-n", NSS_NICKNAME])
-        .status();
+    if let Some(nssdb) = chromium_nssdb {
+        let db_arg = format!("sql:{}", nssdb.display());
+        match nss_import(&db_arg, ca_path) {
+            Ok(status) if status.success() => {
+                ui::info("CA also imported into the NSS trust store (Chrome/Chromium).");
+            }
+            Ok(status) => {
+                ui::warning(format!("certutil NSS import failed with status {}", status));
+            }
+            Err(e) => {
+                ui::warning(format!("Failed to run certutil for NSS import: {}", e));
+            }
+        }
+    }
 
-    let add_status = Command::new("certutil")
-        .args(["-d", &db_arg, "-A", "-t", "C,,", "-n", NSS_NICKNAME, "-i"])
-        .arg(ca_path)
-        .status();
+    let mut imported = 0usize;
+    for profile in &firefox_profiles {
+        let db_arg = format!("sql:{}", profile.display());
+        match nss_import(&db_arg, ca_path) {
+            Ok(status) if status.success() => imported += 1,
+            Ok(status) => {
+                ui::warning(format!(
+                    "certutil Firefox import failed for {:?} with status {}",
+                    profile, status
+                ));
+            }
+            Err(e) => {
+                ui::warning(format!(
+                    "Failed to run certutil for Firefox profile {:?}: {}",
+                    profile, e
+                ));
+            }
+        }
+    }
 
-    match add_status {
-        Ok(status) if status.success() => {
-            ui::info("CA also imported into the NSS trust store (Chrome/Chromium).");
-        }
-        Ok(status) => {
-            ui::warning(format!("certutil NSS import failed with status {}", status));
-        }
-        Err(e) => {
-            ui::warning(format!("Failed to run certutil for NSS import: {}", e));
-        }
+    if imported > 0 {
+        ui::info(format!(
+            "CA also imported into {} Firefox profile(s).",
+            imported
+        ));
     }
 }
 
@@ -309,5 +457,32 @@ mod tests {
 
         std::fs::write(&anchor, "different bytes").unwrap();
         assert!(!anchor_already_matches(&ca, &anchor));
+    }
+
+    #[test]
+    fn firefox_profiles_only_returns_dirs_with_cert9_db() {
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join(".mozilla").join("firefox");
+
+        let with_db = parent.join("abc.default-release");
+        std::fs::create_dir_all(&with_db).unwrap();
+        std::fs::write(with_db.join("cert9.db"), "db").unwrap();
+
+        let without_db = parent.join("xyz.dev-edition");
+        std::fs::create_dir_all(&without_db).unwrap();
+
+        let profiles = firefox_profiles_with_db(&[parent]);
+        assert_eq!(profiles, vec![with_db]);
+    }
+
+    #[test]
+    fn firefox_profiles_empty_for_missing_or_empty_parents() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(firefox_profiles_with_db(&[missing]).is_empty());
+
+        let empty_parent = dir.path().join("empty");
+        std::fs::create_dir_all(&empty_parent).unwrap();
+        assert!(firefox_profiles_with_db(&[empty_parent]).is_empty());
     }
 }
