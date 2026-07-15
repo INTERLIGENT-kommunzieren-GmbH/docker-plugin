@@ -67,7 +67,6 @@ services:
           memory: 768M
         reservations:
           memory: 64M
-    restart: always
 
   gotenberg:
     labels:
@@ -85,7 +84,6 @@ services:
           memory: 512M
         reservations:
           memory: 64M
-    restart: always
     networks:
       - "backend-tier"
 

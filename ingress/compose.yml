@@ -9,7 +9,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    restart: always
+    deploy:
+      restart_policy:
+        condition: any
     volumes:
       - "/var/run/docker.sock:/tmp/docker.sock:ro,z"
       - "${HOMEBREW_PREFIX}/etc/docker-control/ingress/volumes/vhosts.d:/etc/nginx/vhost.d:ro"
@@ -28,7 +30,9 @@ services:
       NGINX_PROXY_CONTAINER: nginx-proxy
     networks:
       - "frontend-tier"
-    restart: always
+    deploy:
+      restart_policy:
+        condition: any
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro,z"
       - "${HOMEBREW_PREFIX}/etc/docker-control/ingress/volumes/tls:/etc/nginx/certs:rw"
