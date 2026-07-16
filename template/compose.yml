@@ -6,7 +6,7 @@ services:
       com.interligent.dockerplugin.service: "db"
       com.interligent.dockerplugin.dir: "${PWD}"
       com.interligent.dockerplugin.project: "${PROJECTNAME}"
-    command: --max-allowed-packet=16M --transaction-isolation=READ-COMMITTED --innodb-lock-wait-timeout=3600 --sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+    command: --max-allowed-packet=16M --transaction-isolation=READ-COMMITTED --innodb_snapshot_isolation=OFF --innodb-lock-wait-timeout=3600 --sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
     environment:
       MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_pw
       MARIADB_USER_FILE: /run/secrets/db_user
