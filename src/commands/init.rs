@@ -96,13 +96,16 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         let clone_url = Text::new("Clone URL (SSH recommended):").prompt()?;
         ui::info(format!("Cloning {} into htdocs...", clone_url));
 
+        // Clone through git2 using the shared auth_callbacks, which handle SSH-agent
+        // auth and trust-on-first-use host-key verification (prompting for unknown hosts
+        // and pinning accepted keys in ~/.ssh/known_hosts).
         let mut fetch_options = git2::FetchOptions::new();
         fetch_options.remote_callbacks(crate::git::GitService::auth_callbacks());
 
         let mut repo_builder = git2::build::RepoBuilder::new();
         repo_builder.fetch_options(fetch_options);
 
-        match repo_builder.clone(&clone_url, &project_dir.join("htdocs")) {
+        match repo_builder.clone(&clone_url, &htdocs_dir) {
             Ok(_) => ui::success("Repository cloned successfully."),
             Err(e) => ui::critical(format!("Failed to clone repository: {}", e)),
         }

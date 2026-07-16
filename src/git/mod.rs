@@ -1,6 +1,11 @@
 use anyhow::{Context, Result, anyhow};
-use git2::{BranchType, Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository};
+use git2::{
+    BranchType, CertificateCheckStatus, Cred, FetchOptions, PushOptions, RemoteCallbacks,
+    Repository,
+};
 use std::path::Path;
+
+mod known_hosts;
 
 pub struct GitService {
     repo: Repository,
@@ -20,7 +25,71 @@ impl GitService {
             let user: &str = username_from_url.unwrap_or("git");
             Cred::ssh_key_from_agent(user)
         });
+        // libgit2 reads ~/.ssh/known_hosts itself, but git2's Rust binding discards its
+        // verdict, so without a certificate_check callback any not-yet-trusted host is
+        // rejected with GIT_ECERTIFICATE (-17). We reproduce OpenSSH's behaviour: accept
+        // known/matching hosts, refuse changed keys, and prompt the user to trust unknown
+        // hosts on first use (persisting the accepted key back to known_hosts).
+        callbacks.certificate_check(Self::verify_host_key);
         callbacks
+    }
+
+    /// Verify a presented SSH host key against `~/.ssh/known_hosts`, prompting the
+    /// user (trust-on-first-use) for hosts that are not yet known.
+    fn verify_host_key(
+        cert: &git2::cert::Cert,
+        host: &str,
+    ) -> Result<CertificateCheckStatus, git2::Error> {
+        let Some(hostkey) = cert.as_hostkey() else {
+            // Not an SSH host key (e.g. an X.509 cert) — defer to libgit2's own check.
+            return Ok(CertificateCheckStatus::CertificatePassthrough);
+        };
+        let (Some(raw), Some(key_type)) = (hostkey.hostkey(), hostkey.hostkey_type()) else {
+            return Ok(CertificateCheckStatus::CertificatePassthrough);
+        };
+        let type_name = key_type.name();
+
+        match known_hosts::check(host, type_name, raw) {
+            known_hosts::HostKeyStatus::Match => Ok(CertificateCheckStatus::CertificateOk),
+            known_hosts::HostKeyStatus::Changed => {
+                crate::ui::critical(format!(
+                    "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED for '{host}'! \
+                     The {} host key does not match the one pinned in ~/.ssh/known_hosts. \
+                     Refusing to connect.",
+                    key_type.short_name()
+                ));
+                Err(git2::Error::from_str("remote host key verification failed"))
+            }
+            known_hosts::HostKeyStatus::Unknown => {
+                let fingerprint = hostkey
+                    .hash_sha256()
+                    .map(|h| known_hosts::fingerprint_sha256(h))
+                    .unwrap_or_else(|| "unavailable".to_string());
+                crate::ui::warning(format!(
+                    "The authenticity of host '{host}' can't be established."
+                ));
+                crate::ui::info(format!(
+                    "{} key fingerprint is {fingerprint}.",
+                    key_type.short_name()
+                ));
+
+                let accepted = inquire::Confirm::new(&format!(
+                    "Add '{host}' to ~/.ssh/known_hosts and continue connecting?"
+                ))
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false);
+
+                if !accepted {
+                    return Err(git2::Error::from_str("host key verification declined"));
+                }
+                match known_hosts::add(host, type_name, raw) {
+                    Ok(path) => crate::ui::success(format!("Added '{host}' to {}", path.display())),
+                    Err(e) => crate::ui::warning(format!("Could not update known_hosts: {e}")),
+                }
+                Ok(CertificateCheckStatus::CertificateOk)
+            }
+        }
     }
     pub fn open(path: &Path) -> Result<Self> {
         let repo = Repository::open(path)
