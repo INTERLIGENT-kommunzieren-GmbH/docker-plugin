@@ -104,9 +104,10 @@ const DEPENDENCIES: &[Dependency] = &[
         args: &[],
         critical: false,
         description: "Required for creating deployment packages",
-        // The old `p7zip` formula is gone from homebrew-core; `sevenzip` is
-        // the current formula providing the `7z` binary.
-        brew_formula: Some("sevenzip"),
+        // We invoke the `7z` binary, which is provided by `p7zip`. The `sevenzip`
+        // formula ships the official upstream build whose binary is named `7zz`,
+        // so it would not satisfy the `7z` check.
+        brew_formula: Some("p7zip"),
     },
     Dependency {
         name: "setfacl",
@@ -115,8 +116,9 @@ const DEPENDENCIES: &[Dependency] = &[
         critical: false,
         description: "Required for granting the host user and the container's www-data user access to htdocs",
         // Linux-only ACL tooling; macOS falls back to `chmod +a` and skips this
-        // check entirely. No reliable Homebrew formula either way.
-        brew_formula: None,
+        // check entirely. On Linux the `acl` Homebrew formula provides both
+        // `setfacl` and `getfacl` (installers filter this out on macOS).
+        brew_formula: Some("acl"),
     },
     Dependency {
         name: "getfacl",
@@ -124,7 +126,8 @@ const DEPENDENCIES: &[Dependency] = &[
         args: &[],
         critical: false,
         description: "Required for detecting existing ACLs on htdocs before re-applying them",
-        brew_formula: None,
+        // Provided by the `acl` formula on Linux (installers filter this out on macOS).
+        brew_formula: Some("acl"),
     },
     Dependency {
         name: "certutil",
@@ -324,10 +327,14 @@ pub fn install_brew_dependencies() -> Result<()> {
     }
 
     // Every dependency that Homebrew can reliably provide, critical and optional alike.
-    // setfacl/getfacl/SSH/SCP/Docker/etc. carry no `brew_formula` and are filtered out.
+    // SSH/SCP/Docker/etc. carry no `brew_formula` and are filtered out.
+    // macOS has no `acl` formula (and doesn't need setfacl/getfacl — it falls back
+    // to `chmod +a`), so skip those tools there.
+    let skip_acl_tools = cfg!(target_os = "macos");
     let installable: Vec<&'static Dependency> = DEPENDENCIES
         .iter()
         .filter(|dep| dep.brew_formula.is_some())
+        .filter(|dep| !(skip_acl_tools && matches!(dep.command, "setfacl" | "getfacl")))
         .collect();
 
     if installable.is_empty() {
@@ -494,8 +501,32 @@ mod tests {
         assert!(!installable.contains(&"Docker"));
         assert!(!installable.contains(&"Docker Compose"));
         assert!(!installable.contains(&"Sudo"));
-        assert!(!installable.contains(&"setfacl"));
-        assert!(!installable.contains(&"getfacl"));
+        // setfacl/getfacl are installable on Linux via the `acl` formula (installers
+        // filter them out on macOS, where the ACL logic falls back to `chmod +a`).
+        assert!(installable.contains(&"setfacl"));
+        assert!(installable.contains(&"getfacl"));
+    }
+
+    #[test]
+    fn seven_zip_uses_p7zip_formula() {
+        // We call the `7z` binary, provided by `p7zip`; the `sevenzip` formula's
+        // binary is named `7zz` and would not satisfy the check.
+        let seven_zip = DEPENDENCIES
+            .iter()
+            .find(|dep| dep.name == "7-Zip")
+            .expect("7-Zip dependency should exist");
+        assert_eq!(seven_zip.brew_formula, Some("p7zip"));
+    }
+
+    #[test]
+    fn acl_tools_share_the_acl_formula() {
+        for name in ["setfacl", "getfacl"] {
+            let dep = DEPENDENCIES
+                .iter()
+                .find(|dep| dep.name == name)
+                .unwrap_or_else(|| panic!("{name} dependency should exist"));
+            assert_eq!(dep.brew_formula, Some("acl"));
+        }
     }
 
     #[test]
