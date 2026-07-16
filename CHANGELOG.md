@@ -2,6 +2,10 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.9 — 2026-07-16
+- Verify SSH host keys with trust-on-first-use for `git2` clones/fetches.
+- Fix `install-deps`: use the `p7zip` formula and install `acl` for `setfacl`/`getfacl`.
+
 ## 2.4.8 — 2026-07-16
 - **template/compose.yml**: add `--innodb_snapshot_isolation=OFF` to the mariadb command (compatibility fix).
 
