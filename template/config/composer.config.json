@@ -17,6 +17,10 @@
     {
       "url": "https://github.com/mostafasy/doctrine-dynamic-discriminator-map.git",
       "type": "git"
+    },
+    {
+      "url": "https://github.com/mostafasy/HtmlPhpExcel",
+      "type": "git"
     }
   ]
 }
