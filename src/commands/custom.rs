@@ -215,3 +215,88 @@ fn get_description(path: &PathBuf) -> String {
         _ => "No description available".to_string(),
     }
 }
+
+/// True if `args` request help for a custom command, i.e. contain the `--help`/`-h` flag.
+/// Only the flags are treated as help triggers (not a bare `help`), so a script is free to
+/// use `help` as one of its own arguments — matching how clap handles built-in subcommands.
+pub fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--help" || a == "-h")
+}
+
+/// Prints a custom script's own help text by invoking its `_help_` hook (mirrors `_desc_`).
+/// Falls back to the script's `_desc_` description, then to a generic line, so `<command>
+/// --help` always shows *something* even for scripts that don't implement `_help_`.
+pub fn print_help(project_dir: &Path, name: &str, path: &Path) -> Result<()> {
+    let help = get_help(project_dir, path);
+    if help.is_empty() {
+        let description = get_description(&path.to_path_buf());
+        println!("{name} - {description}");
+    } else {
+        println!("{help}");
+    }
+    Ok(())
+}
+
+/// Invokes a script's `_help_` hook and returns its trimmed output, or an empty string if
+/// the hook is absent/fails. As a guard against scripts written before this feature existed
+/// (which would otherwise run their real body when probed with `_help_`), we only probe
+/// scripts that contain a quoted `_help_` — mirroring the same guard in [`get_override`].
+fn get_help(project_dir: &Path, path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(contents) if contents.contains("\"_help_\"") || contents.contains("'_help_'") => {}
+        _ => return String::new(),
+    }
+
+    let output = Command::new("bash")
+        .arg(path)
+        .arg("_help_")
+        .current_dir(project_dir)
+        .env("PROJECT_DIR", project_dir)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn wants_help_detects_flags_only() {
+        assert!(wants_help(&["--help".to_string()]));
+        assert!(wants_help(&["foo".to_string(), "-h".to_string()]));
+        // A bare `help` is a normal argument, not a help trigger (matches clap).
+        assert!(!wants_help(&["help".to_string()]));
+        assert!(!wants_help(&["foo".to_string()]));
+        assert!(!wants_help(&[]));
+    }
+
+    #[test]
+    fn get_help_runs_help_hook_when_present() {
+        let dir = tempdir().unwrap();
+        let script = write_script(
+            dir.path(),
+            "cmd.sh",
+            "#!/bin/bash\nif [[ \"$1\" == \"_help_\" ]]; then echo \"custom help\"; exit 0; fi\necho ran body\n",
+        );
+        assert_eq!(get_help(dir.path(), &script), "custom help");
+    }
+
+    #[test]
+    fn get_help_skips_probe_for_script_without_marker() {
+        // A script with no `_help_` guard must NOT have its body executed by the probe.
+        let dir = tempdir().unwrap();
+        let script = write_script(dir.path(), "cmd.sh", "#!/bin/bash\necho ran body\n");
+        assert_eq!(get_help(dir.path(), &script), "");
+    }
+}

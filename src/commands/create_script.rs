@@ -67,8 +67,17 @@ pub fn execute(project_dir: &Path, name: &str) -> Result<()> {
 set -e
 
 if [[ "$1" == "_desc_" ]]; then
-    # output command description
+    # output the short command description (shown in the command list)
     echo "{escaped_description}"
+
+    exit 0
+fi
+
+if [[ "$1" == "_help_" ]]; then
+    # output detailed help (shown by `docker control {escaped_name} --help`)
+    echo "{escaped_name} - {escaped_description}"
+    echo
+    echo "Usage: docker control {escaped_name} [arguments]"
 
     exit 0
 fi

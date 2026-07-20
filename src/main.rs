@@ -326,10 +326,18 @@ fn main() {
 async fn async_main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    // Check for help flags early to show status in help
-    let is_help = args
-        .iter()
-        .any(|arg| arg == "--help" || arg == "-h" || arg == "help");
+    // Determine whether help was requested at the *top level* (the custom project-status
+    // help) versus for a specific subcommand (`<command> --help`, handled by clap for
+    // built-ins or by the custom-script `_help_` hook further below). Only a leading
+    // `help`/`--help`/`-h` — before any subcommand token — counts as top-level, so
+    // `docker control deploy --help` shows deploy's help rather than the global one.
+    let is_help = match commands::custom::split_leading_subcommand(
+        &args,
+        &global_flag_tokens(&Cli::command()),
+    ) {
+        Some((token, _)) => token == "help" || token == "--help" || token == "-h",
+        None => false,
+    };
 
     // Check for version early
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
@@ -472,6 +480,15 @@ async fn async_main() -> anyhow::Result<()> {
                 if command_requires_managed_project(&canonical_name) {
                     check_managed(&project_dir);
                 }
+                // `<command> --help` shows the script's own help via its `_help_` hook
+                // instead of executing it.
+                if commands::custom::wants_help(&trailing_args) {
+                    return commands::custom::print_help(
+                        &project_dir,
+                        &subcommand_name,
+                        &script_path,
+                    );
+                }
                 ui::info(format!("Executing custom script: {:?}", script_path));
                 commands::custom::run_script(&project_dir, &script_path, &trailing_args)?;
                 return Ok(());
@@ -484,7 +501,11 @@ async fn async_main() -> anyhow::Result<()> {
     // running a custom script.
     maybe_offer_self_upgrade();
 
-    let matches = cmd.try_get_matches()?;
+    // `e.exit()` renders clap's own output: for a subcommand `--help`/`--version` it prints
+    // the generated help/version page to stdout and exits 0; for a genuine parse error it
+    // prints the formatted error to stderr and exits 2. Using `?` here would instead wrap
+    // the help text in an "Error:" and exit non-zero, so handle it explicitly.
+    let matches = cmd.try_get_matches().unwrap_or_else(|e| e.exit());
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     let project_dir = cli
@@ -694,6 +715,10 @@ fn execute_external_script(project_dir: &std::path::Path, args: Vec<String>) -> 
 
     match commands::custom::find_script_path(project_dir, command_name) {
         Some(path) => {
+            // `<command> --help` shows the script's own help via its `_help_` hook.
+            if commands::custom::wants_help(command_args) {
+                return commands::custom::print_help(project_dir, command_name, &path);
+            }
             ui::info(format!("Executing custom script: {:?}", path));
             commands::custom::run_script(project_dir, &path, command_args)
         }
