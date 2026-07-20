@@ -2,6 +2,7 @@ use crate::config::{DeployConfig, Environment};
 use crate::git::{GitService, get_docker_user_id};
 use crate::ssh;
 use crate::ui;
+use crate::utils::dependencies;
 use anyhow::{Context, Result, anyhow};
 use inquire::{Confirm, Select};
 use rhai::{AST, Engine, Scope};
@@ -23,6 +24,11 @@ pub async fn execute(
     yes: bool,
 ) -> Result<()> {
     ui::info(format!("Preparing deployment to: {}", env_name));
+
+    // `7z` is used below to compress the release archive before upload. It's an optional
+    // dependency globally, but deploy cannot proceed without it — so make it mandatory
+    // here (offering a direct install) rather than failing later with a cryptic error.
+    dependencies::require_dependency("7z")?;
 
     let config = DeployConfig::load(project_dir)?;
     let env = config

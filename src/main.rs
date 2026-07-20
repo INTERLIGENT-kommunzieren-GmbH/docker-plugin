@@ -574,6 +574,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Restart => {
             check_managed(&project_dir);
+            utils::dependencies::require_acl_tools()?;
             maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["down"])?;
             docker::execute_compose(&project_dir, &["up", "-d"])?;
@@ -596,6 +597,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::SetAcl => {
             check_managed(&project_dir);
+            utils::dependencies::require_acl_tools()?;
             if !docker::is_running(&project_dir) {
                 ui::critical(
                     "Project containers are not running. Start the project first with `docker-control start`.",
@@ -620,6 +622,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Start => {
             check_managed(&project_dir);
+            utils::dependencies::require_acl_tools()?;
             maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["up", "-d"])?;
             if let Err(e) = utils::acl::apply_host_acl(&project_dir) {

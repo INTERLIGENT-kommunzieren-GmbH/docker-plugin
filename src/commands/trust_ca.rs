@@ -52,7 +52,7 @@ pub fn execute() -> Result<()> {
     // neither of which applies on a Windows host, so skip it there. `is_windows_host`
     // also covers the DockerDesktop-on-Windows and native `Platform::Windows` cases.
     if !is_windows_host {
-        install_browser_trust(&ca_path, &platform_info.platform);
+        install_browser_trust(&ca_path)?;
     }
 
     ui::success("CA certificate trusted. Restart your browser for the change to take effect.");
@@ -90,30 +90,15 @@ fn command_exists(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Ensures `certutil` is available for the browser NSS imports, offering a Homebrew
-/// install of `nss` if it's missing. Resolved once per run so users aren't prompted
-/// repeatedly. `platform` is the already-detected platform (avoids re-detecting).
-/// Returns `true` if `certutil` can be used. Never fails the command — callers just
-/// skip the import.
-fn ensure_certutil(platform: &Platform) -> bool {
-    if command_exists("certutil") {
-        return true;
-    }
-
-    ui::warning(
-        "certutil is required to add the CA to the Chrome/Chromium and Firefox trust \
-         stores, but it is not installed.",
-    );
-
-    if dependencies::offer_brew_install("nss", platform) && command_exists("certutil") {
-        return true;
-    }
-
-    ui::warning(
-        "Skipping browser trust import. Install certutil with `brew install nss` and \
-         re-run `docker-control trust-ca`.",
-    );
-    false
+/// Ensures `certutil` is available for the browser NSS imports. `certutil` is genuinely
+/// required to add the CA to the Chrome/Chromium and Firefox trust stores (they keep their
+/// own NSS databases and ignore the system CA bundle), so — like the other per-command
+/// dependencies — it is treated as mandatory: [`dependencies::require_dependency`] offers a
+/// direct Homebrew install of `nss` and errors out if it still isn't available. Only called
+/// once a browser NSS store has actually been found, so users without such browsers are
+/// never prompted or blocked.
+fn ensure_certutil() -> Result<()> {
+    dependencies::require_dependency("certutil")
 }
 
 /// True if `anchor` already exists and has the same content as `ca_path`, so the sudo
@@ -277,12 +262,13 @@ fn firefox_profiles_with_db(parents: &[PathBuf]) -> Vec<PathBuf> {
     profiles
 }
 
-/// Best-effort import of the CA into the browser NSS trust stores that don't read the
-/// system CA bundle: the shared Chrome/Chromium database (`~/.pki/nssdb`) and every
-/// discoverable Firefox profile. `certutil` is resolved once — and only when there is at
-/// least one NSS store to update, so users without these browsers are never prompted.
-/// Never fails the command.
-fn install_browser_trust(ca_path: &Path, platform: &Platform) {
+/// Imports the CA into the browser NSS trust stores that don't read the system CA bundle:
+/// the shared Chrome/Chromium database (`~/.pki/nssdb`) and every discoverable Firefox
+/// profile. `certutil` is resolved once — and only when there is at least one NSS store to
+/// update, so users without these browsers are never prompted. If a store exists, `certutil`
+/// is mandatory (an error is returned when it can't be obtained); the individual per-store
+/// imports remain best-effort and only warn on failure.
+fn install_browser_trust(ca_path: &Path) -> Result<()> {
     let chromium_nssdb = chromium_nssdb_path();
     let firefox_profiles = firefox_profiles_with_db(&firefox_profile_parents());
 
@@ -290,12 +276,10 @@ fn install_browser_trust(ca_path: &Path, platform: &Platform) {
         ui::debug(
             "No Chrome/Chromium or Firefox NSS databases found, skipping browser trust import.",
         );
-        return;
+        return Ok(());
     }
 
-    if !ensure_certutil(platform) {
-        return;
-    }
+    ensure_certutil()?;
 
     if let Some(nssdb) = chromium_nssdb {
         let db_arg = format!("sql:{}", nssdb.display());
@@ -338,6 +322,8 @@ fn install_browser_trust(ca_path: &Path, platform: &Platform) {
             imported
         ));
     }
+
+    Ok(())
 }
 
 fn install_windows_trust(ca_path: &Path) -> Result<()> {

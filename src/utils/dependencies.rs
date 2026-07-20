@@ -232,23 +232,87 @@ fn run_brew_install(formulas: &[&str]) -> bool {
     )
 }
 
-/// Interactively offers to `brew install <formula>` for a single formula — used when a
-/// command discovers at runtime that it needs an optional tool (e.g. `trust-ca` needing
-/// `certutil` from `nss`). `platform` is the already-detected platform, so this does not
-/// re-run platform detection. Returns `true` only when `brew install` ran and succeeded.
-/// No-op returning `false` when Homebrew isn't the platform's package manager, stdin
-/// isn't a terminal, or Homebrew isn't installed.
-pub fn offer_brew_install(formula: &str, platform: &Platform) -> bool {
-    if !can_prompt_brew(platform) || platform::get_brew_prefix().is_none() {
-        return false;
+/// Ensures a single dependency (identified by its `command` binary name) is available
+/// for a command that has just discovered it needs it — e.g. `deploy` needing `7z`, or
+/// `trust-ca` needing `certutil`.
+///
+/// Unlike the optional-dependency *warnings* emitted at startup by [`check_dependencies`],
+/// this treats the dependency as **mandatory**: if it's missing it offers a direct
+/// Homebrew install (when the dep carries a `brew_formula` and Homebrew is usable) and,
+/// if it's still missing afterwards, returns an error so the calling command aborts up
+/// front instead of failing later with a cryptic downstream error. This means the user
+/// never has to run `install-deps` separately just to satisfy one command.
+///
+/// Homebrew is treated as **non-optional**: this tool is distributed via Homebrew, so
+/// `brew` is expected to be present. If the missing dependency has a `brew_formula`, this
+/// offers to install it directly (so the user never has to run `install-deps` separately);
+/// if Homebrew itself is missing, that's a hard error pointing at <https://brew.sh>.
+pub fn require_dependency(command: &str) -> Result<()> {
+    let dep = DEPENDENCIES
+        .iter()
+        .find(|d| d.command == command)
+        .ok_or_else(|| anyhow!("Unknown dependency '{}'", command))?;
+
+    if dependency_exists(dep) {
+        return Ok(());
     }
 
-    let should_install = Confirm::new(&format!("Install `{}` via Homebrew now?", formula))
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false);
+    ui::warning(format!(
+        "Required dependency '{}' ({}) is missing. {}",
+        dep.name, dep.command, dep.description
+    ));
 
-    should_install && run_brew_install(&[formula])
+    let Some(formula) = dep.brew_formula else {
+        return Err(anyhow!(
+            "'{}' is required for this command but is not installed. Install it and try again.",
+            dep.command
+        ));
+    };
+
+    // Homebrew is never optional for this tool, so a missing `brew` is a hard error
+    // rather than a silent skip — regardless of the detected platform.
+    if platform::get_brew_prefix().is_none() {
+        return Err(anyhow!(
+            "Homebrew is required to install '{}' but was not found. Install Homebrew from \
+             https://brew.sh, then run `brew install {}` (or `docker-control install-deps`) \
+             and try again.",
+            dep.command,
+            formula
+        ));
+    }
+
+    if std::io::stdin().is_terminal()
+        && Confirm::new(&format!("Install `{}` via Homebrew now?", formula))
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+        && run_brew_install(&[formula])
+        && dependency_exists(dep)
+    {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "'{}' is required for this command but is not installed. Run `brew install {}` (or \
+         `docker-control install-deps`) and try again.",
+        dep.command,
+        formula
+    ))
+}
+
+/// Ensures the Linux ACL tools (`setfacl`/`getfacl`) that `start`/`restart`/`setacl` use
+/// to grant the host user and the container `www-data` user access to `htdocs` are
+/// present, offering a direct Homebrew install of the `acl` formula if they're missing.
+///
+/// On macOS the ACL logic falls back to `chmod +a`/`ls` (which ship with the OS) and
+/// there is no `acl` formula, so this is a no-op there.
+pub fn require_acl_tools() -> Result<()> {
+    if cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    require_dependency("setfacl")?;
+    require_dependency("getfacl")?;
+    Ok(())
 }
 
 /// Offers to `brew install` any missing dependency that has a `brew_formula`,
@@ -568,6 +632,19 @@ mod tests {
     fn certutil_is_checked_via_which() {
         // `certutil` with no args exits non-zero, so presence must be probed via `which`.
         assert!(CHECK_VIA_WHICH.contains(&"certutil"));
+    }
+
+    #[test]
+    fn require_dependency_errors_on_unknown_command() {
+        let err = require_dependency("definitely-not-a-real-dep").unwrap_err();
+        assert!(err.to_string().contains("Unknown dependency"));
+    }
+
+    #[test]
+    fn require_dependency_ok_for_present_binary() {
+        // `bash` is a critical dependency and is present in the test environment, so this
+        // must short-circuit before any Homebrew logic.
+        require_dependency("bash").expect("bash should be present in the test environment");
     }
 
     #[test]
