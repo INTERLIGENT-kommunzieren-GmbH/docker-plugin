@@ -2,6 +2,12 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.10 — 2026-07-20
+- Add `user-manual` command to open the bundled PDF manual in the default PDF app (opens the Windows viewer on WSL); ship `USER-MANUAL.pdf` via the Homebrew distribution.
+- Enforce per-command dependencies with a direct install offer: `deploy` requires `7z`, `start`/`restart`/`setacl` require the ACL tools on Linux, and `trust-ca` requires `certutil` when a browser is present. Homebrew is treated as non-optional.
+- Show per-command help via `<command> --help`, and let custom scripts implement their own help via a `_help_` hook.
+- Add `--all` flag to `cleanup-backups` to remove every backup.
+
 ## 2.4.9 — 2026-07-16
 - Verify SSH host keys with trust-on-first-use for `git2` clones/fetches.
 - Fix `install-deps`: use the `p7zip` formula and install `acl` for `setfacl`/`getfacl`.
