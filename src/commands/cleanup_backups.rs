@@ -10,6 +10,7 @@ pub fn execute(
     project_dir: &Path,
     keep: Option<usize>,
     older_than_days: Option<u64>,
+    all: bool,
     yes: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -25,7 +26,7 @@ pub fn execute(
 
     backups.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-    let candidates = select_candidates(&backups, keep, older_than_days, now);
+    let candidates = select_candidates(&backups, all, keep, older_than_days, now);
     if candidates.is_empty() {
         ui::info("Nothing to clean up.");
         return Ok(());
@@ -103,10 +104,14 @@ fn find_backups(project_dir: &Path) -> Result<Vec<(String, u64)>> {
 
 fn select_candidates(
     backups: &[(String, u64)],
+    all: bool,
     keep: Option<usize>,
     older_than_days: Option<u64>,
     now: u64,
 ) -> Vec<(String, u64)> {
+    if all {
+        return backups.to_vec();
+    }
     if let Some(days) = older_than_days {
         let cutoff = now.saturating_sub(days * 86400);
         backups
@@ -131,7 +136,7 @@ mod tests {
             ("backup_200".to_string(), 200),
             ("backup_100".to_string(), 100),
         ];
-        let candidates = select_candidates(&backups, Some(1), None, 400);
+        let candidates = select_candidates(&backups, false, Some(1), None, 400);
         assert_eq!(
             candidates,
             vec![
@@ -146,8 +151,20 @@ mod tests {
         let backups: Vec<(String, u64)> = (0..7)
             .map(|i| (format!("backup_{}", i * 100), i * 100))
             .collect();
-        let candidates = select_candidates(&backups, None, None, 1000);
+        let candidates = select_candidates(&backups, false, None, None, 1000);
         assert_eq!(candidates.len(), 2);
+    }
+
+    #[test]
+    fn all_selects_every_backup() {
+        let backups = vec![
+            ("backup_300".to_string(), 300),
+            ("backup_200".to_string(), 200),
+            ("backup_100".to_string(), 100),
+        ];
+        // `all` overrides keep/older_than and returns every backup.
+        let candidates = select_candidates(&backups, true, Some(2), Some(9999), 400);
+        assert_eq!(candidates, backups);
     }
 
     #[test]
@@ -157,14 +174,14 @@ mod tests {
             ("backup_500000".to_string(), 500_000),
         ];
         // now = 1_000_000, 10 days = 864_000s, cutoff = 136_000
-        let candidates = select_candidates(&backups, None, Some(10), 1_000_000);
+        let candidates = select_candidates(&backups, false, None, Some(10), 1_000_000);
         assert_eq!(candidates, vec![("backup_100".to_string(), 100)]);
     }
 
     #[test]
     fn no_candidates_when_nothing_old_enough() {
         let backups = vec![("backup_999_999".to_string(), 999_999)];
-        let candidates = select_candidates(&backups, None, Some(9999), 1_000_000);
+        let candidates = select_candidates(&backups, false, None, Some(9999), 1_000_000);
         assert!(candidates.is_empty());
     }
 

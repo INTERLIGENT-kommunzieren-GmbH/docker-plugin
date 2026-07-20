@@ -57,12 +57,16 @@ enum Commands {
     /// Clean up old local backup_* folders created by update/migrate
     CleanupBackups {
         /// Number of most-recent backups to keep (default 5)
-        #[arg(short, long, conflicts_with = "older_than")]
+        #[arg(short, long, conflicts_with_all = ["older_than", "all"])]
         keep: Option<usize>,
 
         /// Delete backups older than this many days
-        #[arg(long, conflicts_with = "keep")]
+        #[arg(long, conflicts_with_all = ["keep", "all"])]
         older_than: Option<u64>,
+
+        /// Remove all backup folders
+        #[arg(long, conflicts_with_all = ["keep", "older_than"])]
+        all: bool,
 
         /// List backups that would be deleted without deleting them
         #[arg(long)]
@@ -529,10 +533,11 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::CleanupBackups {
             keep,
             older_than,
+            all,
             dry_run,
             yes,
         } => {
-            commands::cleanup_backups::execute(&project_dir, keep, older_than, yes, dry_run)?;
+            commands::cleanup_backups::execute(&project_dir, keep, older_than, all, yes, dry_run)?;
         }
         Commands::CreateControlScript { name } => {
             commands::create_script::execute(&project_dir, &name)?;
