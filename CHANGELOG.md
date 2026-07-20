@@ -2,6 +2,9 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.11 — 2026-07-20
+- Stop flagging optional dependencies at startup: they're now checked only on demand by the command that needs them (`deploy` → `7z`, `trust-ca` → `certutil`, `start`/`restart` → the ACL tools), so `docker control` no longer prints "Optional dependency … is missing" warnings on every invocation.
+
 ## 2.4.10 — 2026-07-20
 - Add `user-manual` command to open the bundled PDF manual in the default PDF app (opens the Windows viewer on WSL); ship `USER-MANUAL.pdf` via the Homebrew distribution.
 - Enforce per-command dependencies with a direct install offer: `deploy` requires `7z`, `start`/`restart`/`setacl` require the ACL tools on Linux, and `trust-ca` requires `certutil` when a browser is present. Homebrew is treated as non-optional.
