@@ -315,23 +315,22 @@ pub fn require_acl_tools() -> Result<()> {
     Ok(())
 }
 
-/// Offers to `brew install` any missing dependency that has a `brew_formula`,
-/// removing newly-installed ones from `missing_critical`/`missing_optional`.
+/// Offers to `brew install` any missing critical dependency that has a `brew_formula`,
+/// removing newly-installed ones from `missing_critical`.
 /// No-op on platforms where Homebrew isn't the standard tool, when nothing
 /// missing has a formula, when stdin isn't a terminal (so unattended/CI runs
 /// never block on a prompt), when Homebrew itself isn't installed, or when
 /// the user declines.
-fn maybe_offer_brew_install(
-    missing_critical: &mut Vec<&'static Dependency>,
-    missing_optional: &mut Vec<&'static Dependency>,
-) {
+///
+/// Optional dependencies are intentionally *not* handled here — they're installed on
+/// demand by [`require_dependency`]/[`require_acl_tools`] when a command actually needs them.
+fn maybe_offer_brew_install(missing_critical: &mut Vec<&'static Dependency>) {
     if !can_prompt_brew(&platform::detect_platform().platform) {
         return;
     }
 
     let installable: Vec<&'static Dependency> = missing_critical
         .iter()
-        .chain(missing_optional.iter())
         .copied()
         .filter(|dep| dep.brew_formula.is_some())
         .collect();
@@ -366,14 +365,13 @@ fn maybe_offer_brew_install(
     }
 
     // Only re-verify the deps we actually attempted to install — the rest
-    // (e.g. Docker, Sudo) have no formula and couldn't have changed state.
+    // (e.g. Docker) have no formula and couldn't have changed state.
     let still_missing: HashSet<&str> = installable
         .iter()
         .filter(|dep| !dependency_exists(dep))
         .map(|dep| dep.name)
         .collect();
     missing_critical.retain(|dep| dep.brew_formula.is_none() || still_missing.contains(dep.name));
-    missing_optional.retain(|dep| dep.brew_formula.is_none() || still_missing.contains(dep.name));
 }
 
 /// Installs every dependency that has a Homebrew formula (critical *and* optional)
@@ -444,43 +442,20 @@ pub fn install_brew_dependencies() -> Result<()> {
 pub fn check_dependencies() -> Result<()> {
     // ui::debug("Checking external CLI dependencies...");
     let mut missing_critical = Vec::new();
-    let mut missing_optional = Vec::new();
 
-    // macOS has neither `setfacl` nor `getfacl`; the ACL logic falls back to
-    // `chmod`/`ls`, which ship with the OS, so don't check for the Linux tools.
-    let skip_acl_tools = cfg!(target_os = "macos");
-    // `trust-ca` only uses certutil (from `nss`) on macOS/Linux via Homebrew; on Windows
-    // there's no such path, and `which` may be absent, so the probe would falsely report
-    // certutil missing on every command. Skip it there.
-    let skip_certutil = cfg!(target_os = "windows");
-
-    for dep in DEPENDENCIES {
-        if skip_acl_tools && matches!(dep.command, "setfacl" | "getfacl") {
-            continue;
-        }
-        if skip_certutil && dep.command == "certutil" {
-            continue;
-        }
+    // Only critical dependencies are checked at startup. Optional ones (setfacl/getfacl,
+    // certutil, 7z, rsync, sudo) are enforced on demand by the command that needs them
+    // (e.g. `deploy` → 7z, `trust-ca` → certutil, `start`/`restart` → setfacl/getfacl) via
+    // `require_dependency`/`require_acl_tools`, which offer a direct Homebrew install at the
+    // point of use — so they're no longer flagged (or prompted for) on every invocation.
+    for dep in DEPENDENCIES.iter().filter(|dep| dep.critical) {
         if !dependency_exists(dep) {
-            if dep.critical {
-                missing_critical.push(dep);
-            } else {
-                missing_optional.push(dep);
-            }
+            missing_critical.push(dep);
         }
     }
 
-    if !missing_critical.is_empty() || !missing_optional.is_empty() {
-        maybe_offer_brew_install(&mut missing_critical, &mut missing_optional);
-    }
-
-    if !missing_optional.is_empty() {
-        for dep in missing_optional {
-            ui::warning(format!(
-                "Optional dependency '{}' ({}) is missing. {}",
-                dep.name, dep.command, dep.description
-            ));
-        }
+    if !missing_critical.is_empty() {
+        maybe_offer_brew_install(&mut missing_critical);
     }
 
     if !missing_critical.is_empty() {
