@@ -93,7 +93,10 @@ docker-control install-deps
 ```
 
 On startup, the tool also checks for missing dependencies and, on macOS / native Linux
-with Homebrew, offers to install the ones it can.
+with Homebrew, offers to install the ones it can. Beyond that, individual commands install
+what they specifically need on demand — e.g. `deploy` will offer to install 7-Zip, and
+`start` the ACL tools — so you rarely need to run `install-deps` by hand. See
+[Dependencies](#14-dependencies).
 
 ---
 
@@ -159,7 +162,7 @@ These flags apply to (nearly) every command:
 |---|---|
 | `-d, --dir <DIRECTORY>` | Operate on the given project directory instead of the current one. |
 | `--debug` | Enable verbose debug output. |
-| `-h, --help` | Show help. With no subcommand, help also prints a full project status summary and lists any custom commands. |
+| `-h, --help` | Show help. At the top level (`docker-control --help`, `-h`, or `help`) it prints a full project status summary and lists any custom commands. After a command (`docker-control <command> --help`) it prints that command's own help page — its arguments, options, and description. |
 | `-V, --version` | Print the `docker-control` version. |
 
 SSH-agent daemon control flags (handled before normal command parsing):
@@ -205,6 +208,10 @@ Start the project containers in detached mode (`docker compose up -d`). Before s
 it does a throttled check (at most weekly) for outdated container images and offers to
 pull them. After starting, it re-applies host and container ACLs on `htdocs`.
 
+On Linux this requires the ACL tools (`setfacl`/`getfacl`, from the `acl` formula); if
+they're missing, `start` offers to install them and aborts if they can't be obtained.
+macOS falls back to `chmod +a` and needs no extra tools. See [Dependencies](#14-dependencies).
+
 ```bash
 docker-control start
 ```
@@ -218,6 +225,7 @@ docker-control stop
 
 #### `restart`
 Stop then start the containers. Also runs the outdated-image check and re-applies ACLs.
+Like `start`, it requires the ACL tools on Linux.
 
 ```bash
 docker-control restart
@@ -268,6 +276,8 @@ at `127.0.0.1:${DB_HOST_PORT}`.
 #### `setacl`
 Re-apply host and container ACL permissions on `htdocs` without restarting. Use this when
 host/container file permissions drift out of sync. The project containers must be running.
+On Linux it requires the ACL tools (`setfacl`/`getfacl`) and offers to install them if
+they're missing.
 
 ```bash
 docker-control setacl
@@ -295,7 +305,10 @@ project's `https://` dev URLs are trusted without browser warnings. It handles:
 - **Linux / WSL** — the system anchor store (Debian/Ubuntu or RHEL layout).
 - **Windows** — the Windows certificate store.
 - **Browsers** — the NSS trust store used by Chrome/Chromium and Firefox (via `certutil`,
-  from the Homebrew `nss` formula) on macOS/Linux.
+  from the Homebrew `nss` formula) on macOS/Linux. `certutil` is only needed when a browser
+  profile actually exists on the machine; when one does, it is **required** — `trust-ca`
+  offers to install `nss` and errors out if it can't, rather than silently skipping the
+  browser import. With no browser present, this step is quietly skipped.
 
 **The CA does not exist until the first domain is signed.** The self-sign companion only
 generates the CA when it signs a project's first domain, so `start-ingress` alone is not
@@ -348,6 +361,10 @@ docker-control merge
 Deploy a selected release/tag to a configured environment. See
 [Deployment in depth](#10-deployment-in-depth).
 
+`deploy` compresses the release with `7z`, so 7-Zip is **required**: if it's missing,
+`deploy` offers to install it (Homebrew `p7zip`) and aborts up front if it can't, rather
+than failing partway through. See [Dependencies](#14-dependencies).
+
 | Option | Description |
 |---|---|
 | `<env>` | Target environment name (must exist in `.deploy.json`). Required. |
@@ -374,10 +391,13 @@ docker-control create-control-script my-command
 
 #### `<script-name> [args...]`
 Any shell script under `control-scripts/` or `htdocs/.docker-control/control-scripts/` is
-dispatched as a subcommand. Custom commands appear in `--help` with their descriptions.
+dispatched as a subcommand. Custom commands appear in the top-level `--help` with their
+descriptions, and `docker-control <script-name> --help` shows the script's own help via its
+`_help_` hook (see [Custom control scripts](#12-custom-control-scripts)).
 
 ```bash
 docker-control my-command arg1 arg2
+docker-control my-command --help    # runs the script's _help_ hook
 ```
 
 ### Maintenance & housekeeping
@@ -414,6 +434,7 @@ PhpStorm exclude entries).
 |---|---|
 | `-k, --keep <N>` | Keep the N most recent backups (default 5). Deletes the rest. |
 | `--older-than <DAYS>` | Delete backups older than DAYS days. Mutually exclusive with `--keep`. |
+| `--all` | Remove **all** backup folders. Mutually exclusive with `--keep` and `--older-than`. |
 | `--dry-run` | List what would be deleted without deleting. |
 | `-y, --yes` | Skip the confirmation prompt. |
 
@@ -421,6 +442,7 @@ PhpStorm exclude entries).
 docker-control cleanup-backups --dry-run
 docker-control cleanup-backups --keep 3
 docker-control cleanup-backups --older-than 30 --yes
+docker-control cleanup-backups --all          # remove every backup (prompts first)
 ```
 
 ### Self-management
@@ -711,9 +733,13 @@ Custom commands are plain `bash` scripts discovered from (in priority order):
 Create one with `docker-control create-control-script <name>`. It's run with the project
 directory as the working directory and `PROJECT_DIR` set in its environment.
 
-A script supports two special probe arguments:
+A script supports three special probe arguments:
 
-- `_desc_` — print a one-line description (shown in `--help`).
+- `_desc_` — print a one-line description (shown in the top-level `--help` list).
+- `_help_` — print a detailed help page (shown by `docker-control <name> --help`). If a
+  script doesn't implement `_help_`, `--help` falls back to its `_desc_` description. The
+  probe only runs on scripts that contain a quoted `_help_`, so older scripts are never
+  executed just to render help.
 - `_override_` — print `true` to always win a name clash with a built-in command.
 
 Generated skeleton:
@@ -723,7 +749,16 @@ Generated skeleton:
 set -e
 
 if [[ "$1" == "_desc_" ]]; then
+    # short description (shown in the command list)
     echo "My command description"
+    exit 0
+fi
+
+if [[ "$1" == "_help_" ]]; then
+    # detailed help (shown by `docker-control my-command --help`)
+    echo "my-command - My command description"
+    echo
+    echo "Usage: docker control my-command [arguments]"
     exit 0
 fi
 
@@ -766,11 +801,14 @@ still enforced.
 
 ## 14. Dependencies
 
-External tools `docker-control` relies on. Critical tools must be present or commands
-abort; optional tools only enable certain features. On macOS / native Linux with Homebrew,
-missing tools that have a formula can be installed interactively or via `install-deps`.
+External tools `docker-control` relies on. Critical tools must be present or every command
+aborts at startup. The tools marked "on demand" below are not required in general, but are
+**mandatory for the specific command that uses them**: when you run such a command and its
+tool is missing, `docker-control` offers to install it there and then and aborts if it
+can't, instead of failing later with a cryptic error. The remaining optional tools simply
+enable extra features.
 
-| Tool | Critical | Used for |
+| Tool | Required | Used for |
 |---|---|---|
 | Docker (≥ 20.10) | yes | All container operations. |
 | Docker Compose (≥ 2.4) | yes | Managing the service stack. |
@@ -780,9 +818,15 @@ missing tools that have a formula can be installed interactively or via `install
 | Bash | yes | Executing custom scripts. |
 | Sudo | no | Elevated privileges (migration, `trust-ca`). |
 | Rsync | no | Migration tasks. |
-| 7-Zip (`7z`, `sevenzip` formula) | no | Building deployment packages. |
-| setfacl / getfacl | no | Host/container ACLs on Linux (macOS falls back to `chmod`). |
-| certutil (`nss` formula) | no | Browser CA trust for `trust-ca`. |
+| 7-Zip (`7z`, `p7zip` formula) | on demand | Building deployment packages — required by `deploy`. |
+| setfacl / getfacl (`acl` formula) | on demand (Linux) | Host/container ACLs — required by `start`/`restart`/`setacl` on Linux (macOS falls back to `chmod`). |
+| certutil (`nss` formula) | on demand | Browser CA trust for `trust-ca` — required when a browser NSS store exists. |
+
+**Installing dependencies.** Missing tools that have a Homebrew formula can be installed
+interactively when a command needs one, or all at once with `install-deps`. Because
+`docker-control` is distributed via Homebrew, **Homebrew itself is treated as
+non-optional**: if a tool needs installing but `brew` is not found, that's a hard error
+pointing you at <https://brew.sh> rather than a silent skip.
 
 Docker/Docker Compose/SSH/SCP are not installed by `install-deps` (Docker needs a daemon;
 Homebrew's `openssh` is keg-only), so install those yourself.
