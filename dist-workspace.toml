@@ -17,7 +17,7 @@ publish-jobs = ["homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
 # Extra static files to include in each App (path relative to this Cargo.toml's dir)
-include = ["template", "ingress/"]
+include = ["template", "ingress/", "USER-MANUAL.pdf"]
 
 [dist.bin-aliases]
 docker-control = ["dc2"]

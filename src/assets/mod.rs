@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 static TEMPLATE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/template");
 static INGRESS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/ingress");
 
+/// The user manual PDF, embedded so `user-manual` works even for source/dev builds where
+/// no installed `share/` copy exists. It is *also* shipped as a file in the Homebrew
+/// distribution (see `dist-workspace.toml`'s `include`), which is preferred when present.
+static MANUAL_PDF: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/USER-MANUAL.pdf"));
+
+/// Filename of the user manual, used both for the installed `share/` copy and the extracted
+/// config-dir copy.
+const MANUAL_FILENAME: &str = "USER-MANUAL.pdf";
+
 pub struct AssetManager {
     config_dir: PathBuf,
     share_dir: Option<PathBuf>,
@@ -66,6 +75,44 @@ impl AssetManager {
             }
         }
         self.config_dir.join("ingress")
+    }
+
+    /// Path to the user manual PDF: the installed `share/` copy when present, otherwise the
+    /// config-dir copy that [`ensure_manual`](Self::ensure_manual) extracts.
+    pub fn get_manual_path(&self) -> PathBuf {
+        if let Some(ref share) = self.share_dir {
+            let path = share.join(MANUAL_FILENAME);
+            if path.exists() {
+                return path;
+            }
+        }
+        self.config_dir.join(MANUAL_FILENAME)
+    }
+
+    /// Ensures the user manual PDF exists on disk and returns its path. When an installed
+    /// `share/` copy is present it is used as-is; otherwise the embedded copy is written to
+    /// the config dir (and refreshed whenever its bytes differ from the embedded ones, e.g.
+    /// after a tool upgrade).
+    pub fn ensure_manual(&self) -> Result<PathBuf> {
+        let path = self.get_manual_path();
+
+        // An installed share/ copy is authoritative and needs no extraction.
+        if self.share_dir.is_some() && path.starts_with(self.share_dir.as_ref().unwrap()) {
+            return Ok(path);
+        }
+
+        let up_to_date = fs::read(&path)
+            .map(|existing| existing == MANUAL_PDF)
+            .unwrap_or(false);
+        if !up_to_date {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, MANUAL_PDF)
+                .with_context(|| format!("Failed to write user manual to {:?}", path))?;
+        }
+
+        Ok(path)
     }
 
     pub fn ensure_assets(&self) -> Result<()> {

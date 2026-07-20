@@ -465,6 +465,17 @@ offer to upgrade when a newer version is available.
 docker-control upgrade
 ```
 
+#### `user-manual`
+Open this manual (the bundled `USER-MANUAL.pdf`) in your default PDF application. The PDF
+ships with the Homebrew distribution; a copy is also embedded in the binary as a fallback.
+On **WSL** it opens the manual with the **Windows** default PDF viewer (via `wslpath` +
+`cmd.exe`/`explorer.exe`); on macOS it uses `open`, on other Linux `xdg-open`, and on
+Windows `start`. This command needs no external tools (not even Docker).
+
+```bash
+docker-control user-manual
+```
+
 ---
 
 ## 6. Project layout

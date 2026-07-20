@@ -150,6 +150,8 @@ enum Commands {
     },
     /// Upgrade docker-control itself via Homebrew
     Upgrade,
+    /// Open the user manual (PDF) in your default PDF application
+    UserManual,
     /// Return metadata for Docker CLI plugin
     #[command(name = "docker-cli-plugin-metadata", hide = true)]
     Metadata,
@@ -264,6 +266,7 @@ fn main() {
             || a == "docker-cli-plugin-metadata"
             || a == "upgrade"
             || a == "install-deps"
+            || a == "user-manual"
     });
     if !no_ssh_needed && std::env::var("DOCKER_CONTROL_SKIP_SSH_AGENT").is_err() {
         let platform_info = utils::platform::detect_platform();
@@ -431,8 +434,12 @@ async fn async_main() -> anyhow::Result<()> {
 
     // `install-deps` exists precisely to install missing dependencies, so it must not be
     // gated behind the dependency check that would abort on the very deps it installs.
-    let is_install_deps = args.iter().any(|a| a == "install-deps");
-    if !is_install_deps && std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
+    // `user-manual` just opens a PDF and needs none of the external tools, so don't force
+    // a full dependency check (e.g. Docker) on it either.
+    let skip_dependency_check = args
+        .iter()
+        .any(|a| a == "install-deps" || a == "user-manual");
+    if !skip_dependency_check && std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
         utils::dependencies::check_dependencies()?;
     }
 
@@ -694,6 +701,9 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Upgrade => {
             commands::upgrade::execute()?;
+        }
+        Commands::UserManual => {
+            commands::user_manual::execute()?;
         }
         Commands::External(args) => {
             execute_external_script(&project_dir, args)?;

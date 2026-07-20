@@ -13,3 +13,4 @@ pub mod status;
 pub mod trust_ca;
 pub mod update;
 pub mod upgrade;
+pub mod user_manual;
