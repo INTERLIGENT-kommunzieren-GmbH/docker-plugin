@@ -2,6 +2,9 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.12 — 2026-07-22
+- Add `install-claude` command to install Claude Code via Anthropic's official installer, then install codebase-memory-mcp via its official installer and enable its auto-indexing of new projects.
+
 ## 2.4.11 — 2026-07-20
 - Stop flagging optional dependencies at startup: they're now checked only on demand by the command that needs them (`deploy` → `7z`, `trust-ca` → `certutil`, `start`/`restart` → the ACL tools), so `docker control` no longer prints "Optional dependency … is missing" warnings on every invocation.
 

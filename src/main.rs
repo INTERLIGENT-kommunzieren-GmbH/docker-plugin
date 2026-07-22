@@ -100,6 +100,8 @@ enum Commands {
     },
     /// Initialize an empty directory with the project template
     Init,
+    /// Install Claude Code using Anthropic's official installer
+    InstallClaude,
     /// Install all Homebrew-installable dependencies, including optional ones
     InstallDeps,
     /// Merge release branch to main using selective cherry-pick workflow
@@ -265,6 +267,7 @@ fn main() {
             || a == "-V"
             || a == "docker-cli-plugin-metadata"
             || a == "upgrade"
+            || a == "install-claude"
             || a == "install-deps"
             || a == "user-manual"
     });
@@ -438,7 +441,7 @@ async fn async_main() -> anyhow::Result<()> {
     // a full dependency check (e.g. Docker) on it either.
     let skip_dependency_check = args
         .iter()
-        .any(|a| a == "install-deps" || a == "user-manual");
+        .any(|a| a == "install-claude" || a == "install-deps" || a == "user-manual");
     if !skip_dependency_check && std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
         utils::dependencies::check_dependencies()?;
     }
@@ -580,6 +583,9 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Commands::Init => {
             commands::init::execute(&project_dir).await?;
+        }
+        Commands::InstallClaude => {
+            commands::install_claude::execute()?;
         }
         Commands::InstallDeps => {
             commands::install_deps::execute()?;
