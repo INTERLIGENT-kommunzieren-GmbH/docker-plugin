@@ -283,6 +283,30 @@ they're missing.
 docker-control setacl
 ```
 
+#### `doctor [--fix]`
+Diagnose file-access problems for the project, and optionally repair them. The project
+containers must be running. It runs two checks:
+
+- **Host ACL on `htdocs`** — whether the host user's rwX ACL (with inheritance) is actually
+  applied, so you can edit files the container creates without `sudo`.
+- **Container access to `/var/www`** — lists every path the container's `www-data` user
+  cannot read or write. This surfaces the common case where Composer's home/XDG directories
+  (`/var/www/.composer`, `.config`, `.cache`) were created later and slipped past the ACL,
+  leaving Composer unable to write its home.
+
+Without `--fix`, `doctor` only reports and exits non-zero if it finds problems (useful in
+scripts). With `--fix` it repairs both sides: it creates the Composer/XDG home directories
+(`.composer`, `.config`, `.cache`, `.local`), re-applies the container ACL (which also
+recomputes the ACL mask), and replays the host ACL on `htdocs`. Before touching the
+container ACL it verifies `setfacl` exists in the php image and, if the `acl` package is
+missing, tells you to update the image (`docker-control pull`) rather than failing with a
+cryptic error. `--fix` may prompt for `sudo` when re-applying the host ACL.
+
+```bash
+docker-control doctor           # report only
+docker-control doctor --fix     # repair, then re-check
+```
+
 ### Ingress (reverse proxy)
 
 The ingress is a shared reverse-proxy compose stack that serves your projects over HTTPS.
@@ -445,6 +469,13 @@ docker-control cleanup-backups --older-than 30 --yes
 docker-control cleanup-backups --all          # remove every backup (prompts first)
 ```
 
+Backups are deleted as the host user, without `sudo`. If a `backup_*` folder contains files
+owned by `root` (for example `vendor/` contents created inside the container), removal of
+that folder fails with a `Permission denied` warning and the command moves on to the next
+one — it never escalates privileges. When that happens, keep the host ACL on `htdocs`
+applied (see [`doctor`](#doctor---fix) / `setacl`) so container-created files stay
+host-owned, or remove the leftover folder manually.
+
 ### Self-management
 
 #### `install-deps`
@@ -454,6 +485,16 @@ run to fix missing dependencies. Requires Homebrew.
 
 ```bash
 docker-control install-deps
+```
+
+#### `install-claude`
+Install [Claude Code](https://docs.claude.com) and its codebase-memory-mcp companion using
+their official install scripts, then enable codebase-memory-mcp's auto-indexing of new
+projects. Each step runs its official installer directly (a `curl … | bash` one-liner, no
+extra confirmation) and streams the installer's own output. Requires `curl` and `bash`.
+
+```bash
+docker-control install-claude
 ```
 
 #### `upgrade`
@@ -870,6 +911,12 @@ Linux, `certutil` (Homebrew `nss`) is needed for browser trust.
 
 **`setacl` says containers aren't running.** Start the project first with
 `docker-control start`.
+
+**Composer can't write its home (`/var/www/.composer` or `.config`).** The container ACL
+missed directories created after startup. Run `docker-control doctor` to see the offending
+paths, then `docker-control doctor --fix` to create the Composer/XDG homes and re-apply the
+ACLs. If `doctor --fix` reports `setfacl` is missing from the php image, refresh it with
+`docker-control pull`.
 
 **`update` refuses to run.** In a non-interactive shell it won't rewrite a project without
 `--yes`. Remember `update` rewrites the *project* from the template (a backup is created);
