@@ -98,6 +98,12 @@ enum Commands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Check that /var/www is readable/writable by the container's www-data user
+    Doctor {
+        /// Repair any inaccessible paths (mkdir Composer/XDG homes + re-apply ACL)
+        #[arg(long)]
+        fix: bool,
+    },
     /// Initialize an empty directory with the project template
     Init,
     /// Install Claude Code using Anthropic's official installer
@@ -581,6 +587,10 @@ async fn async_main() -> anyhow::Result<()> {
         } => {
             commands::deploy::execute(&project_dir, env, release, maintenance_mode, yes).await?;
         }
+        Commands::Doctor { fix } => {
+            check_managed(&project_dir);
+            commands::doctor::execute(&project_dir, fix)?;
+        }
         Commands::Init => {
             commands::init::execute(&project_dir).await?;
         }
@@ -747,7 +757,15 @@ fn execute_external_script(project_dir: &std::path::Path, args: Vec<String>) -> 
 fn command_requires_managed_project(name: &str) -> bool {
     matches!(
         name,
-        "build" | "console" | "pull" | "setacl" | "start" | "stop" | "restart" | "update"
+        "build"
+            | "console"
+            | "doctor"
+            | "pull"
+            | "setacl"
+            | "start"
+            | "stop"
+            | "restart"
+            | "update"
     )
 }
 

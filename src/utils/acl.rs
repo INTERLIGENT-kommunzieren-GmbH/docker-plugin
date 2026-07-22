@@ -27,12 +27,32 @@ pub fn apply_host_acl(project_dir: &Path) -> Result<()> {
         ui::info("Host ACL permissions on htdocs already set, skipping.");
         return Ok(());
     }
+    apply_host_acl_entries(project_dir, uid)
+}
 
+/// Re-applies the host ACL on `htdocs` unconditionally, bypassing the
+/// already-set fast path. Used by `doctor --fix` to force a replay when the
+/// recorded ACL may not actually be in effect.
+pub fn reapply_host_acl(project_dir: &Path) -> Result<()> {
+    let uid = unsafe { libc::getuid() };
+    apply_host_acl_entries(project_dir, uid)
+}
+
+/// Reports whether `htdocs` already carries the host user's ACL entry (with
+/// inheritance). Public wrapper over [`host_acl_already_set`] for callers that
+/// only want to inspect the status (e.g. `doctor`).
+pub fn host_acl_is_set(project_dir: &Path) -> bool {
+    let uid = unsafe { libc::getuid() };
+    host_acl_already_set(project_dir, uid)
+}
+
+/// Applies the host user's rwX ACL entries (regular + inherited) to `htdocs`,
+/// without the already-set skip check.
+fn apply_host_acl_entries(project_dir: &Path, uid: u32) -> Result<()> {
+    ui::info("Setting host ACL permissions on htdocs (may prompt for sudo password)...");
     if cfg!(target_os = "macos") {
-        ui::info("Setting host ACL permissions on htdocs (may prompt for sudo password)...");
         run_chmod_acl(project_dir, &current_username(uid))?;
     } else {
-        ui::info("Setting host ACL permissions on htdocs (may prompt for sudo password)...");
         run_sudo_setfacl(project_dir, &format!("u:{}:rwX", uid), false)?;
         run_sudo_setfacl(project_dir, &format!("u:{}:rwX", uid), true)?;
     }

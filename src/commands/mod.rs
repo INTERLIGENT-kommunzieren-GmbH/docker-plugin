@@ -3,6 +3,7 @@ pub mod cleanup_backups;
 pub mod create_script;
 pub mod custom;
 pub mod deploy;
+pub mod doctor;
 pub mod init;
 pub mod install_claude;
 pub mod install_deps;

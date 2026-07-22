@@ -400,6 +400,32 @@ pub fn exec_as_root(project_dir: &Path, service: &str, args: &[&str]) -> Result<
     Ok(())
 }
 
+/// Runs `args` in `service` as `user`, non-interactively, capturing stdout/stderr.
+///
+/// Unlike [`exec_as_root`], the caller inspects the captured [`Output`] itself
+/// rather than the helper failing on a non-zero exit status — useful for probe
+/// commands (e.g. `find`) whose exit code is not a reliable success signal.
+pub fn exec_as_user_output(
+    project_dir: &Path,
+    service: &str,
+    user: &str,
+    args: &[&str],
+) -> Result<std::process::Output> {
+    Command::new("docker")
+        .arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("exec")
+        .arg("-T")
+        .arg("-u")
+        .arg(user)
+        .current_dir(project_dir)
+        .arg(service)
+        .args(args)
+        .output()
+        .context("Failed to execute docker compose exec")
+}
+
 fn find_ingress_dir() -> Result<PathBuf> {
     // 1. Check environment variable
     if let Ok(env_path) = std::env::var("DOCKER_CONTROL_INGRESS_DIR") {
