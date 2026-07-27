@@ -4,6 +4,8 @@ All notable changes since 2.3.0 are documented here.
 
 ## 2.4.13 — 2026-07-27
 - Capistrano (when a project uses it) now builds on a Debian base (`ruby:3.3.8-slim`) instead of Alpine, for broader compatibility. The bundled `build/capistrano/Dockerfile` is refreshed during `migrate` and `update` for projects that already have one — and the image is rebuilt only when the file actually changed. New projects are unaffected: Capistrano remains opt-in and is never created where it doesn't already exist.
+- Fix `doctor` reporting hundreds of false-positive permission errors. It no longer flags read-only files that `www-data` already owns (e.g. git's immutable object files in `.composer/cache` and vendor `.git` dirs) — a named-user ACL can never make an owner's file writable, and these are harmless. Broken symlinks (missing vendor targets) are likewise no longer misreported as unreadable. `doctor` now flags only genuine problems: paths `www-data` can't read, directories it can't write, or files it can't write that it doesn't own.
+- `update` now syncs the template with `sudo rsync -a` instead of an in-process copy, so it can overwrite project files a container created as root/www-data (previously it aborted mid-update with "Permission denied"). Because `rsync -a` preserves the template's ownership, refreshed files end up owned by the invoking user, clearing the permission problem going forward. `logs`/`volumes` are still skipped and files absent from the template are preserved.
 
 ## 2.4.12 — 2026-07-22
 - Add `install-claude` command to install Claude Code via Anthropic's official installer, then install codebase-memory-mcp via its official installer and enable its auto-indexing of new projects.

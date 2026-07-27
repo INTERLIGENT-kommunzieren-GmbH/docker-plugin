@@ -2,7 +2,7 @@ use crate::assets::AssetManager;
 use crate::docker;
 use crate::ui;
 use crate::utils;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -89,12 +89,27 @@ fn apply_template_update(project_dir: &Path) -> Result<()> {
 
     // Backup current files (excluding what bash excludes)
     let backup_excludes = ["backup_*", ".git", "htdocs", "logs", "volumes"];
-    copy_recursive(project_dir, &backup_dir, &backup_excludes, true)?;
+    copy_recursive(project_dir, &backup_dir, &backup_excludes)?;
 
-    ui::info("Applying template changes...");
-    // Sync from template to project
-    let template_excludes = ["logs", "volumes"];
-    copy_recursive(&template_dir, project_dir, &template_excludes, false)?;
+    // Sync from template to project via `sudo rsync`. Containers create files
+    // under the project as root/www-data that the host user often can't
+    // overwrite, so a plain copy fails with EACCES. `rsync -a` run as root can
+    // always overwrite them, and because it preserves the template's (host-user)
+    // ownership, refreshed files end up owned by the invoking user rather than
+    // root — clearing the permission problem going forward. `logs`/`volumes` are
+    // left untouched, and without `--delete` files absent from the template are
+    // preserved (matching the previous merge behaviour).
+    ui::info("Applying template changes (may prompt for sudo password)...");
+    let template_src = format!("{}/", template_dir.display());
+    let project_dst = format!("{}/", project_dir.display());
+    utils::sudo::run(&[
+        "rsync",
+        "-a",
+        "--exclude=logs",
+        "--exclude=volumes",
+        &template_src,
+        &project_dst,
+    ])?;
 
     // Refresh the Capistrano Dockerfile if this project already uses one (it's opt-in
     // and not part of the template, so it's kept in sync here rather than via
@@ -137,7 +152,10 @@ fn apply_template_update(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_recursive(src: &Path, dst: &Path, excludes: &[&str], is_backup: bool) -> Result<()> {
+/// Snapshots the immediate children of `src` into `dst`, skipping names matched
+/// by `excludes` (a single trailing `*` acts as a prefix wildcard). Used to back
+/// up the project before a template update.
+fn copy_recursive(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
     for entry in WalkDir::new(src).min_depth(1).max_depth(1) {
         let entry = entry?;
         let path = entry.path();
@@ -163,24 +181,14 @@ fn copy_recursive(src: &Path, dst: &Path, excludes: &[&str], is_backup: bool) ->
 
         let target = dst.join(&*file_name);
         if path.is_dir() {
-            if is_backup {
-                // For backup, we copy everything inside
-                let mut options = fs_extra::dir::CopyOptions::new();
-                options.copy_inside = true;
-                options.overwrite = true;
-                fs_extra::dir::copy(path, dst, &options)
-                    .map_err(|e| anyhow::anyhow!("Failed to copy dir: {}", e))?;
-            } else {
-                // For template sync, we copy the directory itself
-                let mut options = fs_extra::dir::CopyOptions::new();
-                options.overwrite = true;
-                options.content_only = true;
-                fs::create_dir_all(&target)?;
-                fs_extra::dir::copy(path, &target, &options)
-                    .map_err(|e| anyhow::anyhow!("Failed to sync dir: {}", e))?;
-            }
+            let mut options = fs_extra::dir::CopyOptions::new();
+            options.copy_inside = true;
+            options.overwrite = true;
+            fs_extra::dir::copy(path, dst, &options)
+                .map_err(|e| anyhow::anyhow!("Failed to copy dir {:?}: {}", path, e))?;
         } else {
-            fs::copy(path, target)?;
+            fs::copy(path, &target)
+                .with_context(|| format!("Failed to copy file to {:?}", target))?;
         }
     }
     Ok(())

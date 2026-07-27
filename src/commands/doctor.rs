@@ -99,8 +99,26 @@ pub fn execute(project_dir: &Path, fix: bool) -> Result<()> {
     }
 }
 
-/// Lists paths under `/var/www` that the container's `www-data` user cannot read
-/// or write.
+/// Lists paths under `/var/www` that the container's `www-data` user genuinely
+/// cannot use. The predicate deliberately does *not* flag every non-writable
+/// file, because two large classes of read-only files are both harmless and
+/// impossible to repair with the container ACL:
+///
+/// * **Read-only files owned by `www-data`.** A POSIX *named-user* ACL entry
+///   (`user:33:rwX`, what the container ACL applies) is only consulted by the
+///   kernel for processes that are *not* the file's owner; for the owner the
+///   `user::` owner-class bits win. Git writes its object files read-only
+///   (`0444`) and owns them as `www-data`, so `setfacl -m u:33` can never make
+///   them writable — re-applying the ACL is a no-op for them. They're also fine:
+///   `www-data` can read them and their parent directories are writable.
+/// * **Broken symlinks** (e.g. missing vendor assets). `find ! -readable`
+///   follows the link and reports the dead target — a deploy/content issue, not
+///   a `www-data` permission problem — so they're excluded here (`! -xtype l`).
+///
+/// What remains genuinely actionable, and what the container ACL is meant to
+/// guarantee, is: anything `www-data` cannot **read**, any **directory** it
+/// cannot write (can't create entries), or any file it cannot write that it does
+/// **not own** (created by root/host without the ACL taking effect).
 fn find_inaccessible_paths(project_dir: &Path) -> Result<Vec<String>> {
     let output = docker::exec_as_user_output(
         project_dir,
@@ -109,12 +127,30 @@ fn find_inaccessible_paths(project_dir: &Path) -> Result<Vec<String>> {
         &[
             "find",
             "/var/www",
+            // Skip broken symlinks: their dead target, not a permission issue,
+            // is what would otherwise trip the readability test.
+            "!",
+            "-xtype",
+            "l",
             "(",
             "!",
             "-readable",
             "-o",
+            "(",
             "!",
             "-writable",
+            // Non-writable only matters for directories, or for files www-data
+            // doesn't own (owner-owned read-only files can't be fixed by ACL and
+            // are harmless).
+            "(",
+            "-type",
+            "d",
+            "-o",
+            "!",
+            "-user",
+            "www-data",
+            ")",
+            ")",
             ")",
             "-print",
         ],
