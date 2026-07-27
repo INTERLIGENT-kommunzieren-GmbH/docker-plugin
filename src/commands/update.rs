@@ -96,6 +96,15 @@ fn apply_template_update(project_dir: &Path) -> Result<()> {
     let template_excludes = ["logs", "volumes"];
     copy_recursive(&template_dir, project_dir, &template_excludes, false)?;
 
+    // Refresh the Capistrano Dockerfile if this project already uses one (it's opt-in
+    // and not part of the template, so it's kept in sync here rather than via
+    // copy_recursive). Rebuild the image only when the file actually changed.
+    let capistrano_build_dir = project_dir.join("build/capistrano");
+    if crate::commands::migrate::write_capistrano_dockerfile(&capistrano_build_dir)? {
+        ui::info("Rebuilding Capistrano image (Dockerfile changed)...");
+        docker::execute_compose(project_dir, &["build", "capistrano"])?;
+    }
+
     // Merge .gitignore
     let gitignore_dist = project_dir.join(".gitignore-dist");
     let gitignore = project_dir.join(".gitignore");

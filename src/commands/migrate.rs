@@ -7,6 +7,68 @@ use std::path::Path;
 use std::process::Command;
 use std::time::SystemTime;
 
+/// Canonical `build/capistrano/Dockerfile` shipped with this tool. Written during
+/// migration (overriding whatever was copied from the backup) and refreshed by the
+/// `update` command whenever a project already has a Capistrano build context, so
+/// every managed project converges on this single definition.
+pub const CAPISTRANO_DOCKERFILE: &str = r#"FROM ruby:3.3.8-slim
+
+WORKDIR /app
+
+RUN apt update && \
+    apt install -y \
+      openssh-client \
+      git \
+      bash \
+      keychain \
+      procps \
+      curl \
+      build-essential \
+      ca-certificates \
+    && update-ca-certificates
+
+RUN gem install --no-document \
+      capistrano:3.19 \
+      ed25519:1.4 \
+      bcrypt_pbkdf:1.1
+
+RUN mkdir -p /root/.ssh && chmod 744 /root/.ssh
+
+SHELL ["/bin/bash", "-c"]
+
+RUN echo $'\n\
+export PATH="/usr/local/bundle/bin:$PATH" \n\
+if [ -e "/ssh/id_rsa.pub" ]; then \n\
+    cp /ssh/id_rsa.pub ~/.ssh/id_rsa.pub \n\
+    chmod 644 /root/.ssh/id_rsa.pub \n\
+fi \n\
+if [ -e "/ssh/id_rsa" ]; then \n\
+    cp /ssh/id_rsa ~/.ssh/id_rsa \n\
+    chmod 600 ~/.ssh/id_rsa \n\
+    eval $(keychain --eval id_rsa) \n\
+fi' >> /root/.profile
+"#;
+
+/// Refreshes an existing `<capistrano_build_dir>/Dockerfile` with
+/// [`CAPISTRANO_DOCKERFILE`]. Does nothing if the file does not already exist —
+/// Capistrano is opt-in per project, so this never creates one. Returns `true` only
+/// when an existing file's contents actually changed, so callers can rebuild the
+/// image just in that case.
+pub fn write_capistrano_dockerfile(capistrano_build_dir: &Path) -> Result<bool> {
+    let dockerfile = capistrano_build_dir.join("Dockerfile");
+    if !dockerfile.exists() {
+        return Ok(false);
+    }
+    let unchanged = fs::read_to_string(&dockerfile)
+        .map(|existing| existing == CAPISTRANO_DOCKERFILE)
+        .unwrap_or(false);
+    if unchanged {
+        return Ok(false);
+    }
+    fs::write(&dockerfile, CAPISTRANO_DOCKERFILE)?;
+    Ok(true)
+}
+
 pub async fn execute(project_dir: &Path) -> Result<()> {
     ui::info("Migrating old docker-control project to current version...");
 
@@ -259,6 +321,14 @@ fn migrate_capistrano(project_dir: &Path, backup_name: &str) -> Result<()> {
             .arg("build/capistrano/")
             .current_dir(project_dir)
             .status();
+
+        // Refresh the copied Dockerfile with the current canonical version so
+        // migrated projects don't carry forward an outdated build definition, and
+        // rebuild the image only if that actually changed the file.
+        if write_capistrano_dockerfile(&project_dir.join("build/capistrano"))? {
+            ui::info("Rebuilding Capistrano image (Dockerfile changed)...");
+            let _ = crate::docker::execute_compose(project_dir, &["build", "capistrano"]);
+        }
 
         // Copy configuration from backup container/capistrano
         ui::info("Copying Capistrano configuration...");

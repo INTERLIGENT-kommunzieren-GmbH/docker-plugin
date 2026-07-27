@@ -2,6 +2,9 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.13 — 2026-07-27
+- Capistrano (when a project uses it) now builds on a Debian base (`ruby:3.3.8-slim`) instead of Alpine, for broader compatibility. The bundled `build/capistrano/Dockerfile` is refreshed during `migrate` and `update` for projects that already have one — and the image is rebuilt only when the file actually changed. New projects are unaffected: Capistrano remains opt-in and is never created where it doesn't already exist.
+
 ## 2.4.12 — 2026-07-22
 - Add `install-claude` command to install Claude Code via Anthropic's official installer, then install codebase-memory-mcp via its official installer and enable its auto-indexing of new projects.
 - Add `doctor` command to check that `htdocs`/`/var/www` is readable/writable — the host ACL on `htdocs` and, for the container's `www-data` user, every path under `/var/www`. With `--fix` it creates the Composer/XDG home dirs (`.composer`, `.config`, `.cache`, `.local`), re-applies the container ACL, and replays the host ACL; it preflights that `setfacl` exists in the php image and reports a clear message if the `acl` package is missing.
