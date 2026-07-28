@@ -2,6 +2,10 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.4.14 — 2026-07-28
+- The project template's `CLAUDE.md` now points explicitly at `htdocs/CLAUDE.md` as the place for project-specific instructions and persistent memory, and states that the root file is template-owned and overwritten by `update`/`migrate`.
+- Fix `migrate` restoring the project-root `CLAUDE.md` from its backup. That file ships with the template, so restoring it shadowed the refreshed copy and left migrated projects pinned to a stale version. `htdocs/` (including `htdocs/CLAUDE.md`), `.claude/` and `.idea/` are still preserved, and the previous root copy remains in the backup folder.
+
 ## 2.4.13 — 2026-07-27
 - Capistrano (when a project uses it) now builds on a Debian base (`ruby:3.3.8-slim`) instead of Alpine, for broader compatibility. The bundled `build/capistrano/Dockerfile` is refreshed during `migrate` and `update` for projects that already have one — and the image is rebuilt only when the file actually changed. New projects are unaffected: Capistrano remains opt-in and is never created where it doesn't already exist.
 - Fix `doctor` reporting hundreds of false-positive permission errors. It no longer flags read-only files that `www-data` already owns (e.g. git's immutable object files in `.composer/cache` and vendor `.git` dirs) — a named-user ACL can never make an owner's file writable, and these are harmless. Broken symlinks (missing vendor targets) are likewise no longer misreported as unreadable. `doctor` now flags only genuine problems: paths `www-data` can't read, directories it can't write, or files it can't write that it doesn't own.

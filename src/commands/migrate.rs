@@ -161,8 +161,16 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         return Err(anyhow!("Failed to apply template."));
     }
 
-    // 4. Restore folders/files from backup if present
-    for item in ["htdocs", ".idea", ".claude", "CLAUDE.md"] {
+    // 4. Restore folders/files from backup if present.
+    //
+    // Only items the template does *not* own belong here: `htdocs` is a separate repo,
+    // `.idea`/`.claude` are user-owned and absent from the template. The project-root
+    // `CLAUDE.md` is deliberately NOT restored — it ships with the template (like
+    // `compose.yml`), so restoring it would shadow the updated copy and leave migrated
+    // projects on a stale version forever. Project-specific instructions and memory
+    // belong in `htdocs/CLAUDE.md`, which is preserved as part of `htdocs`. The previous
+    // root copy is still recoverable from the backup folder.
+    for item in ["htdocs", ".idea", ".claude"] {
         let backup_item = project_dir.join(&backup_name).join(item);
         if backup_item.exists() {
             ui::info(format!("Restoring {}...", item));

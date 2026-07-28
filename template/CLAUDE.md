@@ -2,6 +2,10 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this project.
 
+> **Start here:** this file covers *infrastructure only* and is overwritten by
+> `dc2 update`. Project-specific instructions and persistent memory live in
+> **`htdocs/CLAUDE.md`** — read it before touching application code.
+
 ## What this is
 
 A **Dockerized PHP / LAMP project managed by `docker-control`**. The whole container
@@ -24,11 +28,28 @@ This directory is the **infrastructure / operations** layer. The actual PHP appl
 is in **`htdocs/`, which is a separate git repository** (gitignored here) mounted into
 the `php` container at `/var/www/html`.
 
-> **For how the _application_ works** — its framework, domain model, build/test commands,
-> and coding conventions — **read `htdocs/CLAUDE.md` if it exists.** That file is
-> maintained in the separate `htdocs/` repository. If it is missing, gather application
-> knowledge from the `htdocs/` source itself. This file (the project root `CLAUDE.md`)
-> only covers infrastructure and the `docker-control` workflow.
+### `htdocs/CLAUDE.md` — application instructions and memory
+
+**`htdocs/CLAUDE.md` is the authoritative source for project-specific instructions and
+persistent memory.** Read it at the start of any task that touches the application.
+
+- **Read it first.** Before working on application code, read `htdocs/CLAUDE.md` for the
+  framework, domain model, build/test commands, coding conventions and any
+  project-specific rules. Claude Code does not always load nested `CLAUDE.md` files
+  automatically, so open it explicitly. Also check `htdocs/.claude/` (skills, agents,
+  settings, commands) if present.
+- **Write there, not here.** Anything worth remembering about *this* project —
+  conventions, gotchas, decisions, user preferences, notes for future sessions — belongs
+  in `htdocs/CLAUDE.md` (or `htdocs/.claude/`), which lives in the `htdocs/` repo and is
+  versioned with the application.
+- **This file is template-owned and disposable.** `dc2 update` and `dc2 migrate` both
+  rsync the template over the project root and **overwrite this `CLAUDE.md`**, so notes
+  added here are lost. (`htdocs/`, `.claude/` and `.idea/` are preserved across both.)
+- **If `htdocs/CLAUDE.md` is missing,** gather application knowledge from the `htdocs/`
+  source itself, and create `htdocs/CLAUDE.md` when you have durable knowledge to record.
+
+This file (the project root `CLAUDE.md`) only covers infrastructure and the
+`docker-control` workflow.
 
 ## Project layout
 
@@ -36,6 +57,7 @@ the `php` container at `/var/www/html`.
 |---|---|
 | `compose.yml` | The service stack. Template-owned; don't edit unless explicitly asked. |
 | `htdocs/` | **The application — a separate git repo (gitignored here).** Mounted at `/var/www/html`. |
+| `htdocs/CLAUDE.md` | **Project-specific instructions and memory** — read this for anything app-related. |
 | `htdocs/.docker-control/` | Per-project config: `.deploy.json`, `control-scripts/`, `deployment-scripts/<env>.rhai`. |
 | `config/` | Container config: `apache-sites/`, `php.ini`, `mariadb.cnf`, `composer.config.json`, `crontab`, `htpasswd`, `ssmtp.conf`. |
 | `secrets/` | DB credential files (`db_name.txt`, `db_user.txt`, `db_pw.txt`, `db_root_pw.txt`). |
@@ -116,8 +138,9 @@ one with `dc2 create-control-script <name>`.
 
 - **Prefer `dc2`/`docker-control` commands over raw `docker` / `docker compose`.**
 - **Don't edit** `compose.yml`, `secrets/`, or `config/` (template-owned) unless explicitly
-  asked. `dc2 update` may overwrite root-level template files — **including this
-  `CLAUDE.md`** — so project-specific notes belong in `htdocs/CLAUDE.md`, not here.
+  asked. `dc2 update` overwrites root-level template files — **including this
+  `CLAUDE.md`** — so project-specific instructions and memory belong in
+  `htdocs/CLAUDE.md`, not here (see above).
 - **Application code changes go in `htdocs/`** (its own repo and commits); infrastructure
   changes go in this project-root repo. Keep the two straight.
 - The `php` image tag is `fduarte42/docker-php:${PHP_VERSION}` (`PHP_VERSION` from `.env`).
