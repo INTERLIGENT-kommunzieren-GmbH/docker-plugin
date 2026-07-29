@@ -4,10 +4,10 @@ use anyhow::Result;
 use common::TestRepo;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn create_fake_bin(dir: &PathBuf, name: &str, log_file: &PathBuf) -> Result<()> {
+fn create_fake_bin(dir: &Path, name: &str, log_file: &Path) -> Result<()> {
     let bin_path = dir.join(name);
     // Use full path to bash to avoid PATH issues in the script itself
     // Added logic to fail if FAIL_SSH or FAIL_SCP is set

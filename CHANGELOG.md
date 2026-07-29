@@ -2,6 +2,16 @@
 
 All notable changes since 2.3.0 are documented here.
 
+## 2.5.0 — 2026-07-29
+- `update` now applies only what actually changed. `init`/`update`/`migrate` record the template's file hashes in `.docker-control/state.json` at the project root, giving a merge base: a file the template changed but you didn't is applied silently, a file you both changed prompts (keep mine / take the template's / show diff / write `*.dist`), a file dropped from the template is reported rather than deleted, and a file the template didn't touch is left alone no matter what you edited. Projects predating the state file are asked once how to treat their differing files instead of being overwritten.
+- `start`, `restart` and `status` now tell you when the project template has changed — and only when it genuinely has. The check compares content hashes, not version numbers, so upgrades that don't touch the template stay silent; its fast path is a single fingerprint comparison, so it is never throttled.
+- Add `update --check` (report pending changes and diffs, change nothing, exit non-zero when anything is pending) and `update --force-template` (the previous wholesale overwrite).
+- `update` no longer resets per-project files to the template's placeholders: `secrets/*.txt` and `config/htpasswd` are seeded at `init` and never overwritten again.
+- `.env` is never rewritten. When the template's `.env-dist` gains a key your `.env` lacks, the key is reported and you choose the value — repeated until the key is actually present, since nothing else will add it for you. The project's `.env-dist` (which `init` ships as the reference list of available keys) is kept in sync like any other template file.
+- Conflict resolutions are remembered: answering "keep my version" records the current template as the base, so the same file isn't queried again until the template changes it anew. The same applies to the one-off prompt for projects predating the state file.
+- `update --yes` no longer discards local edits silently. A conflicting file is kept and the template's version is written beside it as `*.dist`, so an unattended run can't lose work; `--force-template` restores the old behaviour.
+- Fix the template sync silently skipping files. rsync's size+mtime quick check would decline to copy a file whose size matched the template's and whose mtime landed in the same second — so a template change could be reported as applied without being written. Both the selective and wholesale (`--force-template`) paths now pass `--ignore-times`, since the files to copy are selected by content hash and rsync must not overrule that.
+
 ## 2.4.14 — 2026-07-28
 - The project template's `CLAUDE.md` now points explicitly at `htdocs/CLAUDE.md` as the place for project-specific instructions and persistent memory, and states that the root file is template-owned and overwritten by `update`/`migrate`.
 - Fix `migrate` restoring the project-root `CLAUDE.md` from its backup. That file ships with the template, so restoring it shadowed the refreshed copy and left migrated projects pinned to a stale version. `htdocs/` (including `htdocs/CLAUDE.md`), `.claude/` and `.idea/` are still preserved, and the previous root copy remains in the backup folder.

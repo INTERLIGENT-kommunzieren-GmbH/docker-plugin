@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use tokio::signal;
 
-use docker_control::{SSH_AGENT_PORT, assets, commands, docker, ui, utils};
+use docker_control::{SSH_AGENT_PORT, assets, commands, docker, template, ui, utils};
 
 #[derive(Parser)]
 #[command(name = "docker-control")]
@@ -155,6 +155,13 @@ enum Commands {
         /// Skip the confirmation prompt (required for non-interactive use)
         #[arg(short, long)]
         yes: bool,
+        /// Report pending template changes and exit without modifying anything
+        /// (exits non-zero when changes are pending)
+        #[arg(long)]
+        check: bool,
+        /// Overwrite every template-owned file, ignoring local modifications
+        #[arg(long)]
+        force_template: bool,
     },
     /// Upgrade docker-control itself via Homebrew
     Upgrade,
@@ -624,6 +631,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Restart => {
             check_managed(&project_dir);
             utils::dependencies::require_acl_tools()?;
+            maybe_report_template_drift(&project_dir);
             maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["down"])?;
             docker::execute_compose(&project_dir, &["up", "-d"])?;
@@ -672,6 +680,7 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Start => {
             check_managed(&project_dir);
             utils::dependencies::require_acl_tools()?;
+            maybe_report_template_drift(&project_dir);
             maybe_offer_image_pull(&project_dir);
             docker::execute_compose(&project_dir, &["up", "-d"])?;
             if let Err(e) = utils::acl::apply_host_acl(&project_dir) {
@@ -711,9 +720,20 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Migrate => {
             commands::migrate::execute(&project_dir).await?;
         }
-        Commands::Update { yes } => {
+        Commands::Update {
+            yes,
+            check,
+            force_template,
+        } => {
             check_managed(&project_dir);
-            commands::update::execute(&project_dir, yes)?;
+            commands::update::execute(
+                &project_dir,
+                commands::update::UpdateOptions {
+                    yes,
+                    check,
+                    force_template,
+                },
+            )?;
         }
         Commands::Upgrade => {
             commands::upgrade::execute()?;
@@ -820,6 +840,69 @@ fn maybe_offer_self_upgrade_with(prompt: &dyn commands::upgrade::UpgradePromptPr
             ui::warning(format!("Failed to upgrade docker-control: {}", e));
         }
     }
+}
+
+/// Tells the user when the project template has actually moved since this
+/// project last synced, and stays quiet otherwise. Best-effort: a failure to
+/// read the template or the project's state must never block the command.
+///
+/// Not throttled, unlike the self-update and image checks — those shell out to
+/// `brew` or hit a registry, whereas this is a local hash comparison whose fast
+/// path is a single string compare.
+///
+/// This deliberately does not live in `upgrade`: that command shells out to
+/// `brew upgrade`, so the still-running process holds the *old* embedded
+/// template and would compare against stale bytes. The notice lands on the next
+/// invocation instead.
+fn maybe_report_template_drift(project_dir: &std::path::Path) {
+    let Ok(template_dir) = template::resolve_dir() else {
+        return;
+    };
+
+    let changes = match template::diff(project_dir, &template_dir) {
+        Ok(changes) => changes,
+        Err(e) => {
+            ui::debug(format!("Skipping template drift check: {}", e));
+            return;
+        }
+    };
+
+    let summary = template::Summary::from_changes(&changes);
+    // `unknown` alone is not worth a notice: a project predating the state file
+    // can't clear those without running `update`, so it would never go away.
+    // Everything else that `update` can act on belongs here.
+    if summary.safe.is_empty()
+        && summary.conflicts.is_empty()
+        && summary.removed.is_empty()
+        && summary.env_keys.is_empty()
+        && summary.gitignore_entries.is_empty()
+    {
+        return;
+    }
+
+    // `template_synced_at`, not `initialized_with`: the last sync is the version
+    // the comparison is actually against. `initialized_with` is frozen at `init`,
+    // so using it would name a version whose changes were long since applied.
+    let since = template::TemplateState::load(project_dir)
+        .map(|s| s.template_synced_at)
+        .unwrap_or_else(|| "an untracked version".to_string());
+
+    // Naming both versions is only informative when they differ; a template
+    // edited without a version bump would otherwise read "since X (now X)".
+    let current = env!("CARGO_PKG_VERSION");
+    ui::warning(if since == current {
+        format!(
+            "The project template has changed since your last sync ({}).",
+            since
+        )
+    } else {
+        format!(
+            "The project template has changed since {} (now {}).",
+            since, current
+        )
+    });
+    summary.print(true);
+    ui::info("  Run `docker control update` to apply, or `update --check` to see the diffs.");
 }
 
 fn maybe_offer_image_pull(project_dir: &std::path::Path) {

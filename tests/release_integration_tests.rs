@@ -217,7 +217,7 @@ fn test_vendor_module_release() -> Result<()> {
 
 fn repo_list_branches(path: &std::path::Path) -> Result<Vec<String>> {
     let output = std::process::Command::new("git")
-        .args(&["branch", "--format=%(refname:short)"])
+        .args(["branch", "--format=%(refname:short)"])
         .current_dir(path)
         .output()?;
 

@@ -23,10 +23,13 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
     // 2. Git Status
     show_git_status(project_dir);
 
-    // 3. Deployment Status
+    // 3. Template Status
+    show_template_status(project_dir);
+
+    // 4. Deployment Status
     show_deployment_status(project_dir);
 
-    // 4. Docker Status
+    // 5. Docker Status
     show_docker_status(project_dir).await;
 
     Ok(())
@@ -152,6 +155,53 @@ fn show_git_status(project_dir: &Path) {
         ui::warning("  Git Repository: ✗ Not a git repository");
         println!("    Initialize with 'git init' in the htdocs directory");
     }
+}
+
+/// Reports whether the project is in sync with the current project template.
+/// Unlike the start-up notice this also lists files with no recorded base, since
+/// `status` is where the user is explicitly asking for detail.
+fn show_template_status(project_dir: &Path) {
+    // An unmanaged directory has no project to compare: every template file
+    // would report as a missing "safe add", contradicting the line status just
+    // printed about the directory not being managed at all.
+    if !utils::is_managed(project_dir) {
+        return;
+    }
+
+    let Ok(template_dir) = crate::template::resolve_dir() else {
+        return;
+    };
+
+    let changes = match crate::template::diff(project_dir, &template_dir) {
+        Ok(changes) => changes,
+        Err(e) => {
+            ui::warning(format!(
+                "  Project Template: ✗ Could not be checked ({})",
+                e
+            ));
+            return;
+        }
+    };
+
+    let state = crate::template::TemplateState::load(project_dir);
+    let summary = crate::template::Summary::from_changes(&changes);
+
+    if summary.is_empty() {
+        match &state {
+            Some(state) => ui::success(format!(
+                "  Project Template: ✓ Up to date (synced at {})",
+                state.template_synced_at
+            )),
+            // No state file and nothing differing: the project matches the
+            // current template, so there is nothing to record or report.
+            None => ui::success("  Project Template: ✓ Matches the current template"),
+        }
+        return;
+    }
+
+    ui::warning("  Project Template: ○ Changes pending");
+    summary.print(false);
+    println!("    Run 'docker control update' to apply, or 'update --check' for diffs");
 }
 
 fn show_deployment_status(project_dir: &Path) {

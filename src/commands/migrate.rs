@@ -161,6 +161,12 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         return Err(anyhow!("Failed to apply template."));
     }
 
+    // The whole template was just applied, so record it as the merge base.
+    // Without this, a migrated project starts with no base and every later
+    // divergence is unattributable. `initialized_with` stays unset: the version
+    // the old project was created with isn't recoverable.
+    crate::template::stamp(project_dir, &template_dir, false)?;
+
     // 4. Restore folders/files from backup if present.
     //
     // Only items the template does *not* own belong here: `htdocs` is a separate repo,

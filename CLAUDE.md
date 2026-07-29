@@ -39,6 +39,7 @@ SSH agent lifecycle (start/stop/restart) is handled before the async runtime sta
 | `src/ssh/mod.rs` | `exec_ssh` / `copy_ssh` helpers used by deploy |
 | `src/config/mod.rs` | Loads/saves `.deploy.json`; config file search order: `htdocs/.docker-control/.deploy.json` → `.deploy.json` |
 | `src/assets/mod.rs` | `template/` and `ingress/` directories are compiled into the binary via `include_dir!` and extracted to the OS config dir on first run (or when version changes) |
+| `src/template/mod.rs` | Tracks which template a project is synced to (`.docker-control/state.json`); three-way classification of template changes |
 | `src/ui/mod.rs` | Terminal output helpers: `info`, `warning`, `critical`, `success`, `debug` |
 | `src/utils/` | Platform detection, SSH agent forwarding, dependency checks, `is_managed()` |
 
@@ -46,7 +47,9 @@ SSH agent lifecycle (start/stop/restart) is handled before the async runtime sta
 
 **Managed projects** — Most commands require a `.managed-by-docker-control` (or `.managed-by-docker-control-plugin`) sentinel file in the project directory. `utils::is_managed()` checks this.
 
-**Project layout** — The tool expects web app source at `htdocs/` (a separate git repo), vendor modules at `htdocs/vendor/<name>/`, and config at `htdocs/.docker-control/`.
+**Project layout** — The tool expects web app source at `htdocs/` (a separate git repo), vendor modules at `htdocs/vendor/<name>/`, and config at `htdocs/.docker-control/`. Note the two same-named directories: `htdocs/.docker-control/` is app-level config (deploy config, control/deployment scripts) in the app repo, while `<project>/.docker-control/` holds docker-control's own state for the wrapper project.
+
+**Template state** (`template/mod.rs`) — `init`/`update`/`migrate` record the *template's* file hashes in `<project>/.docker-control/state.json`. That is a merge base, so `base` (recorded) vs `theirs` (template now) vs `mine` (project now) classifies each file exactly: unchanged upstream → silent regardless of local edits; changed upstream only → safe to apply; changed on both sides → conflict. Version numbers are deliberately *not* the trigger — the template changes in roughly one release in five, so a version bump says nothing about whether anything needs applying. A `template_fingerprint` over the whole manifest is the fast path. `.env-dist`/`.gitignore-dist` are excluded from hashing (their project copy is renamed/consumed, so a missing copy is indistinguishable from a missing base) and checked by content against `.env`/`.gitignore` instead; `secrets/*.txt` and `config/htpasswd` are seeded once and never compared.
 
 **Release workflow** (`commands/release.rs`) — Uses git worktrees under `releases/` to keep release preparation isolated. Increments semver from existing branches/tags, updates `composer.json`, runs `composer install` inside a Docker container (`fduarte42/docker-php:<PHP_VERSION>`), commits `composer.lock`, then pushes the branch. Patch releases create a tag; major/minor create a new `X.Y.x` branch.
 

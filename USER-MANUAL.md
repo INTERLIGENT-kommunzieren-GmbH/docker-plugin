@@ -115,8 +115,9 @@ under `htdocs/vendor/<name>/`).
 
 **Template-driven.** New projects are scaffolded from an embedded template. The template
 is compiled into the binary and extracted to your OS config directory on first run (and
-whenever the version changes). `docker-control update` re-syncs an existing project with
-the current template.
+whenever the version changes). Each project records which template it is synced to in
+`.docker-control/state.json`, so `docker-control update` can apply only what actually
+changed — and `start`/`status` can tell you when there *is* something to apply.
 
 **Ingress.** An optional shared reverse-proxy stack that routes `https://` dev URLs to
 your project containers. It is a separate compose stack from your project.
@@ -434,20 +435,55 @@ and directory), discovered via Docker container labels.
 docker-control show-running
 ```
 
-#### `update [--yes]`
-Re-sync **this project** with the current template. It stops the project (if running),
-creates a timestamped `backup_<epoch>/` of the current project files, copies the template
-over the project (excluding `logs/` and `volumes/`), merges `.gitignore-dist` into
-`.gitignore`, and restarts the project if it had been running.
+#### `update [--yes] [--check] [--force-template]`
+Re-sync **this project** with the current template, applying only what actually changed.
 
-This **rewrites project files**, so it asks for confirmation. In a non-interactive
-context it refuses unless `--yes` is given.
+`init`, `update` and `migrate` record the template's file hashes in
+`.docker-control/state.json` at the project root (outside `htdocs/`, and meant to be
+committed). That recorded state is a merge base, so each file can be classified exactly:
+
+| Situation | What `update` does |
+|---|---|
+| The template didn't change this file | nothing — your edits are irrelevant here |
+| The template changed it, you didn't | applies it |
+| New file in the template | adds it |
+| **You changed it and so did the template** | asks: keep yours / take the template's / show the diff / write the template's copy as `*.dist` |
+| File dropped from the template | reports it once; never deletes |
+| No recorded state (project predates it) | asks once whether to review each differing file, take the template's version for all, or keep yours |
+
+Your answers are recorded, so "keep my version" means you aren't asked again — your edit now sits on top of the current template, and only a *further* upstream change to that file counts as a new conflict.
+
+`secrets/*.txt` and `config/htpasswd` hold per-project values and are seeded at `init`
+only — `update` never overwrites them. `logs/` and `volumes/` are skipped. `.env` is never
+rewritten: when the template's `.env-dist` gains a key your `.env` lacks, the key is
+reported and you choose the value — and it keeps being reported until the key is actually
+there, since nothing else will add it for you. The project's own `.env-dist` (shipped by
+`init` as the reference list of available keys) is refreshed like any other template file.
+New `.gitignore-dist` entries are merged into `.gitignore`.
+
+When it has anything to apply, `update` stops the project (if running), creates a
+timestamped `backup_<epoch>/`, applies the changes, and restarts the project. This
+**rewrites project files**, so it asks for confirmation; in a non-interactive context it
+refuses unless `--yes` is given. With `--yes`, a conflicting file is kept as-is and the
+template's version is written beside it as `*.dist` — an unattended run never discards
+local work.
+
+| Option | Description |
+|---|---|
+| `-y, --yes` | Skip the confirmation prompt (required for non-interactive use). |
+| `--check` | Report pending changes and the diffs, change nothing, exit non-zero if anything is pending. Useful in CI. |
+| `--force-template` | Overwrite every template-owned file, ignoring local modifications (`secrets/` and `config/htpasswd` are still preserved). |
+
+`start`, `restart` and `status` mention pending template changes automatically — and stay
+quiet when the template hasn't moved, so the notice only appears when there is something
+to do.
 
 > `update` updates the *project*. To upgrade the *tool itself*, use `upgrade`.
 
 ```bash
 docker-control update
-docker-control update --yes    # non-interactive
+docker-control update --check   # what would change? (exit 1 if anything)
+docker-control update --yes     # non-interactive
 ```
 
 #### `cleanup-backups [options]`

@@ -608,7 +608,7 @@ async fn perform_deployment(ctx: DeploymentContext<'_>) -> Result<()> {
 
 #[cfg(test)]
 std::thread_local! {
-    pub(crate) static MOCK_SSH_COMMANDS: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    pub(crate) static MOCK_SSH_COMMANDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn setup_rhai_engine(_user: String, _domain: String) -> Engine {

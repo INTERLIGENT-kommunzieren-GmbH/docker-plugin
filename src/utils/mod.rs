@@ -160,10 +160,18 @@ pub fn remove_phpstorm_exclude(project_dir: &Path, folder_name: &str) -> Result<
 }
 
 pub fn hash_file(path: impl AsRef<Path>) -> Result<String> {
-    let content = std::fs::read(path)?;
+    Ok(hash_bytes(&std::fs::read(path)?))
+}
+
+/// Hex-encoded SHA-256 of `bytes`. Shared with [`hash_file`] so file and
+/// in-memory hashes are directly comparable.
+pub fn hash_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(content);
-    let hash = hasher.finalize();
-    Ok(hash.iter().map(|b| format!("{:02x}", b)).collect())
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }

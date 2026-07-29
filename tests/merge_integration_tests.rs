@@ -134,7 +134,7 @@ fn test_merge_vendor_module() -> Result<()> {
 
 fn repo_list_remote_branches(path: &std::path::Path) -> Result<Vec<String>> {
     let output = Command::new("git")
-        .args(&["branch", "-r", "--format=%(refname:short)"])
+        .args(["branch", "-r", "--format=%(refname:short)"])
         .current_dir(path)
         .output()?;
 

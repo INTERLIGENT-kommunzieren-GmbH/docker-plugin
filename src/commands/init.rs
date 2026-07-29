@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use inquire::{Confirm, Select, Text};
 use std::fs;
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub async fn execute(project_dir: &Path) -> Result<()> {
     ui::info("Initializing new project...");
@@ -25,12 +25,18 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
         }
     }
 
-    // Find template directory
-    let template_dir = find_template_dir()?;
+    // Find template directory. Shared with `update`/`status` so the state this
+    // stamps below describes the same template they will compare against.
+    let template_dir = crate::template::resolve_dir()?;
     ui::info(format!("Using template from: {:?}", template_dir));
 
     // Copy template files
     copy_dir_contents(&template_dir, project_dir)?;
+
+    // Record the template this project starts from, so later runs can tell
+    // whether the template has actually moved rather than just guessing from
+    // the version number.
+    crate::template::stamp(project_dir, &template_dir, true)?;
 
     // Rename .gitignore-dist to .gitignore
     let gitignore_dist = project_dir.join(".gitignore-dist");
@@ -113,57 +119,6 @@ pub async fn execute(project_dir: &Path) -> Result<()> {
 
     ui::success("Project initialized successfully!");
     Ok(())
-}
-
-fn find_template_dir() -> Result<PathBuf> {
-    // 1. Check environment variable
-    if let Ok(env_path) = std::env::var("DOCKER_CONTROL_TEMPLATE_DIR") {
-        let path = PathBuf::from(env_path);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    // 2. Check user config directory (AssetManager)
-    if let Ok(asset_manager) = crate::assets::AssetManager::new() {
-        let path = asset_manager.get_template_dir();
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    // 3. Check relative to binary
-    if let Ok(exe_path) = std::env::current_exe() {
-        let real_exe_path = exe_path.canonicalize().unwrap_or(exe_path);
-        if let Some(exe_dir) = real_exe_path.parent() {
-            // Check for direct template/ folder
-            let path = exe_dir.join("template");
-            if path.exists() {
-                return Ok(path);
-            }
-            // Check one level up (if binary is in a bin/ folder)
-            if let Some(parent) = exe_dir.parent() {
-                // Check parent/template
-                let path = parent.join("template");
-                if path.exists() {
-                    return Ok(path);
-                }
-                // Check parent/share/docker-control/template (Homebrew standard)
-                let path = parent.join("share").join("docker-control").join("template");
-                if path.exists() {
-                    return Ok(path);
-                }
-            }
-        }
-    }
-
-    // 3. Check current directory (for development)
-    let path = PathBuf::from("template");
-    if path.exists() {
-        return Ok(path);
-    }
-
-    Err(anyhow!("Could not find template directory"))
 }
 
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
