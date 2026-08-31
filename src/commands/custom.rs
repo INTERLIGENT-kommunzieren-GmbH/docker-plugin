@@ -170,6 +170,22 @@ pub fn split_leading_subcommand(
     Some((name, trailing))
 }
 
+/// The part of raw argv that belongs to `docker-control` itself: everything up to, but not
+/// including, the first standalone `--`.
+///
+/// Tokens after a `--` are arguments to something else — the command `console -- <cmd>` runs
+/// inside a container, or a custom script's own arguments — so the raw-argv scans that look
+/// for docker-control's flags must not see them. Without this, `console -- php --version`
+/// prints docker-control's version instead of PHP's, and `console -- foo --stop-ssh-agent`
+/// stops the SSH agent instead of passing the flag to `foo`.
+pub fn args_before_separator(args: &[String]) -> &[String] {
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    &args[..end]
+}
+
 pub fn get_custom_commands(project_dir: &Path) -> Vec<CustomCommand> {
     let mut commands = Vec::new();
     let mut search_paths = Vec::new();
@@ -265,6 +281,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn own(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| a.to_string()).collect()
+    }
+
     fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
         fs::write(&path, body).unwrap();
@@ -279,6 +299,31 @@ mod tests {
         assert!(!wants_help(&["help".to_string()]));
         assert!(!wants_help(&["foo".to_string()]));
         assert!(!wants_help(&[]));
+    }
+
+    #[test]
+    fn args_before_separator_stops_at_the_first_double_dash() {
+        let args = own(&["dc", "console", "--", "php", "--version"]);
+        assert_eq!(
+            args_before_separator(&args),
+            own(&["dc", "console"]).as_slice()
+        );
+    }
+
+    #[test]
+    fn args_before_separator_keeps_everything_when_there_is_no_double_dash() {
+        let args = own(&["dc", "console", "db"]);
+        assert_eq!(args_before_separator(&args), args.as_slice());
+    }
+
+    #[test]
+    fn args_before_separator_ignores_double_dash_prefixed_flags() {
+        // `--debug` merely starts with `--`; only a standalone `--` is the separator.
+        let args = own(&["dc", "--debug", "console", "--", "ls"]);
+        assert_eq!(
+            args_before_separator(&args),
+            own(&["dc", "--debug", "console"]).as_slice()
+        );
     }
 
     #[test]

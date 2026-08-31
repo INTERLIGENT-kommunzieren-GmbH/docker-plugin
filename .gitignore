@@ -5,3 +5,6 @@
 /target
 /test_init/
 /dist/
+
+# Reference copy of the pre-Rust bash tool; kept locally, never committed
+/old_template/

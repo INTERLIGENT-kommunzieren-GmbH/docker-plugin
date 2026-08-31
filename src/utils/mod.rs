@@ -159,6 +159,102 @@ pub fn remove_phpstorm_exclude(project_dir: &Path, folder_name: &str) -> Result<
     Ok(())
 }
 
+/// The `.idea/vcs.xml` line registering `relative_path` as a git root.
+fn vcs_mapping_entry(relative_path: &str) -> String {
+    format!(
+        "    <mapping directory=\"$PROJECT_DIR$/{}\" vcs=\"Git\" />",
+        relative_path
+    )
+}
+
+const VCS_XML_SKELETON: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+     <project version=\"4\">\n\
+     \x20 <component name=\"VcsDirectoryMappings\">\n\
+     \x20 </component>\n\
+     </project>";
+
+/// Registers `relative_path` (relative to the project root) as an additional git
+/// root in `.idea/vcs.xml`, so PhpStorm shows its branches, commits and diffs in
+/// the Git tool window instead of ignoring the nested repository.
+///
+/// No-op when the project has no `.idea` directory, and idempotent. Like
+/// [`exclude_from_phpstorm`] this edits the XML textually — the crate has no XML
+/// parser and this file is a flat, IDE-generated list.
+pub fn register_phpstorm_git_root(project_dir: &Path, relative_path: &str) -> Result<()> {
+    let idea_dir = project_dir.join(".idea");
+    if !idea_dir.exists() {
+        return Ok(());
+    }
+
+    let vcs_path = idea_dir.join("vcs.xml");
+    let content = if vcs_path.exists() {
+        std::fs::read_to_string(&vcs_path).context(format!("Failed to read {:?}", vcs_path))?
+    } else {
+        VCS_XML_SKELETON.to_string()
+    };
+
+    let entry = vcs_mapping_entry(relative_path);
+    if content.contains(entry.trim()) {
+        return Ok(());
+    }
+
+    // A project that has never had a VCS mapping can lack the component entirely.
+    let updated = if let Some(component) = content.find("<component name=\"VcsDirectoryMappings\">")
+    {
+        // Anchor on the closing tag of *that* component, not on the first `</component>`
+        // in the file: `vcs.xml` also holds `IssueNavigationConfiguration`, and IDEA
+        // writes it first, so a file-wide search puts the mapping in the wrong component
+        // — where PhpStorm ignores it and drops it on the next rewrite.
+        let close = content[component..]
+            .find("</component>")
+            .map(|offset| component + offset)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Malformed {:?}: VcsDirectoryMappings has no closing tag",
+                    vcs_path
+                )
+            })?;
+        format!("{}{}\n  {}", &content[..close], entry, &content[close..])
+    } else {
+        content.replacen(
+            "</project>",
+            &format!(
+                "  <component name=\"VcsDirectoryMappings\">\n{}\n  </component>\n</project>",
+                entry
+            ),
+            1,
+        )
+    };
+
+    std::fs::write(&vcs_path, updated).context(format!("Failed to write {:?}", vcs_path))?;
+    Ok(())
+}
+
+/// Reverse of [`register_phpstorm_git_root`]. No-op when the mapping is absent.
+pub fn unregister_phpstorm_git_root(project_dir: &Path, relative_path: &str) -> Result<()> {
+    let vcs_path = project_dir.join(".idea/vcs.xml");
+    if !vcs_path.exists() {
+        return Ok(());
+    }
+
+    let content =
+        std::fs::read_to_string(&vcs_path).context(format!("Failed to read {:?}", vcs_path))?;
+
+    let entry = vcs_mapping_entry(relative_path);
+    // Match on the trimmed entry so an IDE reflow of the indentation still matches.
+    let Some(line) = content
+        .lines()
+        .find(|line| line.trim() == entry.trim())
+        .map(str::to_string)
+    else {
+        return Ok(());
+    };
+
+    let updated = content.replace(&format!("{}\n", line), "");
+    std::fs::write(&vcs_path, updated).context(format!("Failed to write {:?}", vcs_path))?;
+    Ok(())
+}
+
 pub fn hash_file(path: impl AsRef<Path>) -> Result<String> {
     Ok(hash_bytes(&std::fs::read(path)?))
 }

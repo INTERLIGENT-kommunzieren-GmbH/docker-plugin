@@ -164,7 +164,7 @@ These flags apply to (nearly) every command:
 | `-d, --dir <DIRECTORY>` | Operate on the given project directory instead of the current one. |
 | `--debug` | Enable verbose debug output. |
 | `-h, --help` | Show help. At the top level (`docker-control --help`, `-h`, or `help`) it prints a full project status summary and lists any custom commands. After a command (`docker-control <command> --help`) it prints that command's own help page — its arguments, options, and description. |
-| `-V, --version` | Print the `docker-control` version. |
+| `-V, --version` | Print the `docker-control` version. Top-level only — after a subcommand the flag belongs to that subcommand (`module link <m> --version <v>`) or, past a `--`, to the command being run in the container (`console -- php --version`). |
 
 SSH-agent daemon control flags (handled before normal command parsing):
 
@@ -259,7 +259,7 @@ docker-control pull
 
 ### Working inside the stack
 
-#### `console [container]`
+#### `console [container] [-- command...]`
 Open an interactive `bash` shell inside a container. Defaults to the `php` container,
 entered as the `www-data` user with the working directory at `/var/www/html`. Pass a
 service name to target a different container; pass `help` to list available services.
@@ -273,6 +273,138 @@ docker-control console help     # list services
 Run `composer`, `php`, `bin/console`, `artisan`, etc. **inside** the php container via
 `console`, since the application is mounted there. MariaDB is also reachable from the host
 at `127.0.0.1:${DB_HOST_PORT}`.
+
+Everything after a `--` runs as a one-shot command instead of opening a shell, in the same
+container, as the same user, with the same working directory — and exits with the command's
+own status code, so it composes in scripts and `&&` chains:
+
+```bash
+docker-control console -- composer install
+docker-control console -- php bin/console cache:clear
+docker-control console db -- mysql -e 'show databases'
+```
+
+The `--` is required: without it the first argument is read as a service name, so
+`console ls -la` is an error rather than a command. It also means every flag after it belongs
+to the inner command — `console -- php --version` reports PHP's version, not docker-control's. The command is passed straight to the
+container as arguments — no shell is involved, so pipes, redirects, globs and `&&` need an
+explicit shell of their own:
+
+```bash
+docker-control console -- bash -lc 'ls -1 var/log/*.log | wc -l'
+```
+
+Output is piped verbatim when stdout isn't a terminal (`console -- cat composer.json > copy.json`
+writes the file unchanged), and a TTY is allocated when it is, so interactive commands such as
+`php -a` or a prompting `bin/console` generator still work.
+
+#### `module <create|link|unlink|list>`
+Check a vendor module out for local development. Vendor modules are installed from source, so
+`htdocs/vendor/<vendor>/<name>/` is a real git clone — but anything edited there is discarded by
+the next `composer install`. `module link` moves the clone to `htdocs/modules/<vendor>/<name>/`
+and adds a Composer `path` repository that symlinks it back into `vendor/`, so your edits
+survive and the module's git history stays usable (`release` and `merge` still find it through
+the symlink).
+
+The path repository pins the version to whatever `composer.lock` already records for the
+package, via `options.versions`. Your `require` constraint is never touched, and there is no
+state file — the repository entry itself is the state.
+
+The project containers must be running: Composer runs inside the `php` container.
+
+| Option | Description |
+|---|---|
+| `link [module]` | Link a module for development. Prompts when `module` is omitted. |
+| `--version <VER>` | Pin a specific version instead of the one from `composer.lock`. |
+| `unlink [module]` | Restore the module to a normal Composer install under `vendor/`. |
+| `--purge` | Also delete the development checkout from `htdocs/modules/`. |
+| `-y, --yes` | Skip the confirmation prompt when `--purge` finds unsaved work. |
+| `list` | Show every vendor module and which are linked. Read-only; no containers needed. |
+| `create <module>` | Scaffold a **new** module and link it, for a module that doesn't exist yet. |
+| `--type <TYPE>` | Package type forwarded to `composer init` (default `library`). |
+| `-y, --yes` | Run `composer init` with `--no-interaction` instead of asking its questions. |
+
+```bash
+docker-control module list
+docker-control module create acme/widget
+docker-control module link acme/widget
+docker-control module link acme/widget --version 2.4.x-dev
+docker-control module link acme/widget -- -W --no-scripts   # extra composer update args
+docker-control module unlink acme/widget
+docker-control module unlink acme/widget --purge
+```
+
+##### `create` — a module that doesn't exist yet
+
+`link` assumes the module is already installed. `create` is for starting one from nothing: it
+creates `htdocs/modules/<vendor>/<name>/` with a `src/` directory, runs `git init` on branch
+`main`, runs **`composer init` interactively** in the module directory so you answer Composer's
+usual questions, adds a PSR-4 autoload mapping for `src/` if `composer init` didn't, commits the
+scaffold, and then wires it into the application exactly as `link` would — a `path` repository
+pinned to `dev-main`, symlinked into `vendor/`.
+
+```bash
+docker-control module create acme/widget                 # composer init asks its questions
+docker-control module create acme/widget --yes           # accept composer init's defaults
+docker-control module create acme/widget --type=symfony-bundle
+```
+
+The namespace is derived from the package name, so `acme/my-widget` autoloads
+`Acme\MyWidget\` from `src/`. The package name must be a valid, lowercase Composer name; an
+invalid one is rejected before anything is created.
+
+**`create` adds a `require`, and `link` never does.** That is the one real difference between
+them: `link` works on a package the application already requires, whereas nothing requires a
+brand-new module, so `vendor/<vendor>/<name>` would never appear without it. This splits what
+you commit:
+
+- the **`path` repository** must *not* be committed — `deploy` and `release` build from the
+  committed tree, where `modules/` does not exist;
+- the **`require`** *does* belong in a commit, but only once the module is pushed somewhere the
+  application's other repositories can reach. Until then the application only installs on your
+  machine.
+
+Because of that, `unlink` refuses a module whose checkout has no git remote: it would remove the
+path repository — currently the package's only source — and leave the application requiring
+something nothing can supply. Push the module first, or drop it from the application with
+`docker-control console -- composer remove <vendor>/<name>`.
+
+If `create` fails partway through (typically because Composer couldn't resolve the new
+package), the application side is rolled back — `composer.json`, `composer.lock` and the
+`.gitignore` entry — but **the new module is kept**. Those files are your work, not something
+Composer can reproduce.
+
+`link` also adds `/modules/` to `htdocs/.gitignore` and registers the checkout as an additional
+git root in `.idea/vcs.xml`, so PhpStorm shows the module's branches, commits and diffs in the
+Git tool window. `unlink` removes the mapping again; the `.idea` handling is a no-op when the
+project has no `.idea` directory.
+
+The `.gitignore` entry is written under a marker comment:
+
+```gitignore
+# docker-control: development module checkouts
+/modules/
+```
+
+That marker is what makes the change reversible — it identifies the entry as the command's own,
+so `unlink` removes it (once nothing is linked and no checkout remains) while never touching a
+`/modules/` line your project already had. If your `.gitignore` already ignores `modules/`,
+`link` adds nothing and `unlink` removes nothing. A link/unlink round trip therefore restores
+`composer.json`, `composer.lock`, `vendor/` and `.gitignore` exactly as they were.
+
+> ⚠️ **Don't commit the link.** `composer.json` and `composer.lock` are tracked files, and
+> `deploy`/`release` build from the committed tree — where `modules/` does not exist. Run
+> `unlink` before committing, or keep the change out of your commits.
+
+Two behaviours worth knowing: `unlink` uses `composer update --prefer-source`, which applies to
+the whole Composer run rather than just the named package, so anything else reinstalled in that
+run also becomes a source install. And after `unlink` swaps the symlink back for a real
+directory, PHP's realpath/opcache in the running container can serve stale paths — restart the
+`php` container if the application misbehaves.
+
+`unlink` never destroys work: it leaves the development checkout in `htdocs/modules/` unless you
+pass `--purge`, and `--purge` checks for uncommitted changes and for commits that exist on no
+remote before asking to confirm.
 
 #### `setacl`
 Re-apply host and container ACL permissions on `htdocs` without restarting. Use this when

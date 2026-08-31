@@ -49,10 +49,17 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Open a shell inside a container
+    /// Open a shell inside a container, or run a one-shot command in it after `--`
     Console {
         /// Container name (defaults to 'php')
         container: Option<String>,
+
+        /// Command to run instead of opening a shell, e.g. `console -- composer install`
+        // `last = true` confines this to values after a literal `--`, which is what keeps it
+        // unambiguous against `container`: without it, `console ls -la` would have to guess
+        // whether `ls` names a service or a command.
+        #[arg(last = true, allow_hyphen_values = true, value_name = "COMMAND")]
+        command: Vec<String>,
     },
     /// Clean up old local backup_* folders created by update/migrate
     CleanupBackups {
@@ -114,6 +121,11 @@ enum Commands {
     Merge {
         /// Optional module name
         module: Option<String>,
+    },
+    /// Manage vendor modules checked out for local development
+    Module {
+        #[command(subcommand)]
+        action: commands::module::ModuleAction,
     },
     /// Pull the latest Docker images for the project
     Pull,
@@ -184,7 +196,12 @@ fn get_help_styles() -> Styles {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let raw_args: Vec<String> = std::env::args().collect();
+    // Only the part of argv before a standalone `--` is docker-control's own; the rest
+    // belongs to the command `console -- <cmd>` runs in the container (or to a custom
+    // script). Scanning all of argv here would let `console -- foo --stop-ssh-agent`
+    // stop the agent instead of passing the flag along to `foo`.
+    let args = commands::custom::args_before_separator(&raw_args);
 
     // Handle stop synchronously
     if args.contains(&"--stop-ssh-agent".to_string()) {
@@ -273,7 +290,7 @@ fn main() {
     // before creating the Tokio runtime so set_var is single-threaded (safe).
     // Skip for commands that don't use SSH and would otherwise block on `docker info`
     // inside detect_platform() before the user sees any output.
-    let no_ssh_needed = args.iter().any(|a| {
+    let no_ssh_needed = args.iter().any(|a: &String| {
         a == "--help"
             || a == "-h"
             || a == "--version"
@@ -344,36 +361,41 @@ fn main() {
 
 async fn async_main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    // Docker-control's own flags are only the ones before a standalone `--` — see
+    // [`commands::custom::args_before_separator`]. `args` itself stays intact, because the
+    // custom-script dispatch below has to forward everything the user typed.
+    let own_args = commands::custom::args_before_separator(&args);
 
     // Determine whether help was requested at the *top level* (the custom project-status
     // help) versus for a specific subcommand (`<command> --help`, handled by clap for
     // built-ins or by the custom-script `_help_` hook further below). Only a leading
     // `help`/`--help`/`-h` — before any subcommand token — counts as top-level, so
     // `docker control deploy --help` shows deploy's help rather than the global one.
-    let is_help = match commands::custom::split_leading_subcommand(
-        &args,
-        &global_flag_tokens(&Cli::command()),
-    ) {
-        Some((token, _)) => token == "help" || token == "--help" || token == "-h",
-        None => false,
-    };
+    let leading_token =
+        commands::custom::split_leading_subcommand(&args, &global_flag_tokens(&Cli::command()))
+            .map(|(token, _)| token);
+    let is_help = matches!(leading_token.as_deref(), Some("help" | "--help" | "-h"));
 
-    // Check for version early
-    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+    // `--version`/`-V` counts only as the leading token, for the same reason as `is_help`
+    // above: anywhere else it belongs to a subcommand, not to docker-control. Scanning all
+    // of argv swallowed both `console -- php --version` (PHP's flag) and
+    // `module link <m> --version <v>` (that subcommand's own argument), printing
+    // docker-control's version and exiting instead of running the command.
+    if matches!(leading_token.as_deref(), Some("--version" | "-V")) {
         println!("docker-control {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
     // Manually parse dir for metadata and help
     let mut project_dir = std::env::current_dir().expect("Failed to get current directory");
-    for i in 0..args.len() {
-        if (args[i] == "--dir" || args[i] == "-d") && i + 1 < args.len() {
-            project_dir = PathBuf::from(&args[i + 1]);
+    for i in 0..own_args.len() {
+        if (own_args[i] == "--dir" || own_args[i] == "-d") && i + 1 < own_args.len() {
+            project_dir = PathBuf::from(&own_args[i + 1]);
             break;
         }
-        if let Some(value) = args[i]
+        if let Some(value) = own_args[i]
             .strip_prefix("--dir=")
-            .or_else(|| args[i].strip_prefix("-d="))
+            .or_else(|| own_args[i].strip_prefix("-d="))
         {
             project_dir = PathBuf::from(value);
             break;
@@ -387,7 +409,10 @@ async fn async_main() -> anyhow::Result<()> {
     };
 
     // Return early if metadata is requested, no dependencies needed
-    if args.iter().any(|arg| arg == "docker-cli-plugin-metadata") {
+    if own_args
+        .iter()
+        .any(|arg| arg == "docker-cli-plugin-metadata")
+    {
         let metadata = serde_json::json!({
             "SchemaVersion": "0.1.0",
             "Vendor": "INTERLIGENT kommunizieren GmbH",
@@ -444,7 +469,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Apply --debug, dependency checks, and asset init before the clash-resolution
     // block below (which can dispatch a custom script and return early) so every path
     // gets the same setup a normal built-in dispatch gets.
-    if args.iter().any(|arg| arg == "--debug") {
+    if own_args.iter().any(|arg| arg == "--debug") {
         ui::set_debug(true);
     }
 
@@ -452,7 +477,7 @@ async fn async_main() -> anyhow::Result<()> {
     // gated behind the dependency check that would abort on the very deps it installs.
     // `user-manual` just opens a PDF and needs none of the external tools, so don't force
     // a full dependency check (e.g. Docker) on it either.
-    let skip_dependency_check = args
+    let skip_dependency_check = own_args
         .iter()
         .any(|a| a == "install-claude" || a == "install-deps" || a == "user-manual");
     if !skip_dependency_check && std::env::var("DOCKER_CONTROL_SKIP_DEPENDENCY_CHECK").is_err() {
@@ -474,10 +499,10 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Resolve a name clash between a built-in command and a same-named custom script
     // BEFORE clap validates the built-in's own argument schema, so the clash check
-    // isn't blocked by a strict built-in (e.g. `Console`, `Deploy`) rejecting args that
-    // were actually meant for the custom script. Only `Build` accepts arbitrary extra
-    // args itself, so waiting until after parsing would make this feature unusable for
-    // every other built-in whenever extra/unrecognized args are passed.
+    // isn't blocked by a strict built-in (e.g. `Deploy`) rejecting args that were actually
+    // meant for the custom script. Only `Build`, and `Console` after a `--`, accept
+    // arbitrary extra args themselves, so waiting until after parsing would make this
+    // feature unusable for every other built-in whenever extra/unrecognized args are passed.
     if let Some((subcommand_name, trailing_args)) =
         commands::custom::split_leading_subcommand(&args, &global_flag_tokens(&cmd))
     {
@@ -570,9 +595,18 @@ async fn async_main() -> anyhow::Result<()> {
             }
             docker::execute_compose(&project_dir, &all_args)?;
         }
-        Commands::Console { container } => {
+        Commands::Console { container, command } => {
             check_managed(&project_dir);
-            docker::console(&project_dir, container)?;
+            if command.is_empty() {
+                docker::console(&project_dir, container)?;
+            } else {
+                // Exit with the container command's own status rather than returning Ok, so
+                // `dc2 console -- <cmd>` is usable in a script or an `&&` chain. Bypassing
+                // the `Err` path also keeps the output free of an "Error:" line the inner
+                // command already explained itself.
+                let code = docker::console_exec(&project_dir, container, &command)?;
+                std::process::exit(code);
+            }
         }
         Commands::CleanupBackups {
             keep,
@@ -612,6 +646,14 @@ async fn async_main() -> anyhow::Result<()> {
                 &project_dir,
                 module,
                 commands::merge::MergeOptions::default(),
+            )?;
+        }
+        Commands::Module { action } => {
+            check_managed(&project_dir);
+            commands::module::execute(
+                &project_dir,
+                action,
+                commands::module::ModuleOptions::default(),
             )?;
         }
         Commands::Pull => {
@@ -780,6 +822,7 @@ fn command_requires_managed_project(name: &str) -> bool {
         "build"
             | "console"
             | "doctor"
+            | "module"
             | "pull"
             | "setacl"
             | "start"

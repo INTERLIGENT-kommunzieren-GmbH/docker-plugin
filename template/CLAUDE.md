@@ -86,11 +86,53 @@ dc2 pull             # pull the latest images for the project
 ```bash
 dc2 console          # bash in the php container as www-data (cwd /var/www/html)
 dc2 console db       # bash in the db container
+dc2 console -- <cmd> # run <cmd> in the php container instead of opening a shell
 ```
 
 Run `composer`, `php`, `bin/console`, `artisan`, etc. **inside** the php container via
 `dc2 console`, since the app is mounted at `/var/www/html`. MariaDB is reachable from the
 host at `127.0.0.1:${DB_HOST_PORT}` (see `.env`).
+
+Anything after `--` runs one-shot in the container — same user, same workdir — and exits with
+that command's status code, which is the form to use non-interactively:
+
+```bash
+dc2 console -- composer install
+dc2 console -- php bin/console cache:clear
+dc2 console db -- mysql -e 'show databases'
+dc2 console -- bash -lc 'ls -1 var/log/*.log | wc -l'   # pipes/globs need an explicit shell
+```
+
+The `--` is mandatory (without it the first word is read as a service name), and the command is
+passed as arguments rather than through a shell, so redirects and pipes belong either on the host
+side of the call or inside an explicit `bash -lc`.
+
+**Developing a vendor module**
+
+```bash
+dc2 module list                  # which vendor modules exist, and which are linked
+dc2 module create acme/widget    # scaffold a NEW module and link it (composer init runs interactively)
+dc2 module link acme/widget      # move an existing one to htdocs/modules/ and symlink it into vendor/
+dc2 module unlink acme/widget    # restore the normal vendor install
+```
+
+Vendor modules are source installs, so `htdocs/vendor/<vendor>/<name>/` is a real git clone —
+but edits there are discarded by the next `composer install`. `dc2 module link` moves the clone
+to `htdocs/modules/<vendor>/<name>/` and adds a Composer `path` repository that symlinks it back
+into `vendor/`, so edits survive. The module's git history stays usable, including via
+`dc2 release` / `dc2 merge`.
+
+⚠️ `module link` edits `composer.json` and `composer.lock`, which are **tracked** files. Do not
+commit the link: `dc2 deploy` and `dc2 release` build from the committed tree, where `modules/`
+does not exist. Run `dc2 module unlink` before committing.
+
+`dc2 module create` is for a module that does not exist yet: it scaffolds `src/`, runs `git init` on
+`main`, runs `composer init` interactively, adds a PSR-4 mapping, and wires the same path repository
+`link` uses — pinned `dev-main`. Unlike `link` it also adds the app's `require`, because nothing
+requires a brand-new module. So the path repository still must not be committed, but the `require`
+does belong in a commit *once the module is pushed* somewhere the app's other repositories can
+reach. Until then `dc2 module unlink` will refuse it, since removing the path repository would
+leave the app requiring a package nothing can supply.
 
 **Ingress** (shared reverse proxy — only when needed)
 

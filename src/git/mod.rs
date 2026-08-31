@@ -97,12 +97,57 @@ impl GitService {
         Ok(Self { repo })
     }
 
+    /// Creates a new repository at `path` with `initial_branch` as the unborn HEAD, so the
+    /// first commit lands on that branch rather than on git's compiled-in default.
+    pub fn init(path: &Path, initial_branch: &str) -> Result<Self> {
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.initial_head(initial_branch);
+        let repo = Repository::init_opts(path, &opts)
+            .context(format!("Failed to initialise git repository at {:?}", path))?;
+        Ok(Self { repo })
+    }
+
+    /// Whether any remote is configured. A module that exists only locally has none, which
+    /// is what `module unlink` checks before removing the path repository that is currently
+    /// the package's only source.
+    pub fn has_remotes(&self) -> Result<bool> {
+        Ok(!self.repo.remotes()?.is_empty())
+    }
+
     pub fn get_current_branch(&self) -> Result<String> {
         let head = self.repo.head().context("Failed to get HEAD")?;
         let branch = head
             .shorthand()
             .map_err(|_| anyhow!("HEAD is not a branch"))?;
         Ok(branch.to_string())
+    }
+
+    /// `true` when the worktree has staged, unstaged or untracked changes.
+    pub fn is_dirty(&self) -> Result<bool> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true).include_ignored(false);
+        let statuses = self.repo.statuses(Some(&mut opts))?;
+        Ok(!statuses.is_empty())
+    }
+
+    /// Number of commits reachable from `HEAD` but from no remote-tracking ref.
+    ///
+    /// Deliberately *not* "ahead of `origin/<branch>`": a Composer source install
+    /// leaves the checkout on a detached HEAD at the locked reference, where there
+    /// is no current branch to compare against. Walking from `HEAD` and hiding
+    /// every `refs/remotes/*` gives a meaningful answer in both states.
+    pub fn unpushed_commits(&self) -> Result<usize> {
+        let mut walk = self.repo.revwalk()?;
+        walk.push_head()?;
+
+        for reference in self.repo.references_glob("refs/remotes/*")? {
+            let reference = reference?;
+            if let Some(oid) = reference.target() {
+                walk.hide(oid)?;
+            }
+        }
+
+        Ok(walk.flatten().count())
     }
 
     pub fn list_release_branches(&self) -> Result<Vec<String>> {
@@ -144,6 +189,25 @@ impl GitService {
             .as_commit()
             .ok_or_else(|| anyhow!("Target is not a commit"))?;
         self.repo.branch(name, commit, false)?;
+        Ok(())
+    }
+
+    /// The commit HEAD points at, as a hex sha. Works on a detached HEAD, which is the
+    /// state Composer leaves a source-installed vendor checkout in.
+    pub fn head_commit_id(&self) -> Result<String> {
+        let head = self.repo.head().context("Failed to get HEAD")?;
+        let commit = head.peel_to_commit().context("HEAD is not a commit")?;
+        Ok(commit.id().to_string())
+    }
+
+    /// Detaches HEAD at `commit_id` — the inverse of [`Self::checkout_branch`], for
+    /// putting a checkout back the way a Composer source install had it.
+    pub fn checkout_detached(&self, commit_id: &str) -> Result<()> {
+        let oid = git2::Oid::from_str(commit_id)
+            .context(format!("Not a valid commit id: {}", commit_id))?;
+        let commit = self.repo.find_commit(oid)?;
+        self.repo.checkout_tree(commit.as_object(), None)?;
+        self.repo.set_head_detached(oid)?;
         Ok(())
     }
 
@@ -304,14 +368,50 @@ impl GitService {
         Ok(())
     }
 
+    /// Commits the index. Handles an **unborn HEAD** — a freshly [`Self::init`]ed repository
+    /// has a branch ref that no commit exists on yet, so the root commit has no parent.
+    /// Previously this errored on `head()`, which is the only case this changes.
     pub fn commit(&self, message: &str) -> Result<()> {
+        let sig = self.repo.signature()?;
+        self.commit_as(message, &sig)
+    }
+
+    /// Commits the index like [`Self::commit`], but supplies `name`/`email` when the machine
+    /// has no git identity configured, so a root commit can still be created. Returns whether
+    /// that fallback was used, for the caller to report.
+    ///
+    /// Deliberately *not* folded into [`Self::commit`]: every other caller commits into a
+    /// developer's own repository, where inventing an author would be wrong.
+    pub fn commit_with_identity_fallback(
+        &self,
+        message: &str,
+        name: &str,
+        email: &str,
+    ) -> Result<bool> {
+        match self.repo.signature() {
+            Ok(sig) => {
+                self.commit_as(message, &sig)?;
+                Ok(false)
+            }
+            Err(_) => {
+                let sig = git2::Signature::now(name, email)?;
+                self.commit_as(message, &sig)?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn commit_as(&self, message: &str, sig: &git2::Signature<'_>) -> Result<()> {
         let mut index = self.repo.index()?;
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
-        let sig = self.repo.signature()?;
-        let parent = self.repo.head()?.peel_to_commit()?;
+        let parent = match self.repo.head() {
+            Ok(head) => Some(head.peel_to_commit()?),
+            Err(_) => None,
+        };
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
         self.repo
-            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+            .commit(Some("HEAD"), sig, sig, message, &tree, &parents)?;
         Ok(())
     }
 

@@ -9,6 +9,7 @@ pub mod install_claude;
 pub mod install_deps;
 pub mod merge;
 pub mod migrate;
+pub mod module;
 pub mod release;
 pub mod show_running;
 pub mod status;

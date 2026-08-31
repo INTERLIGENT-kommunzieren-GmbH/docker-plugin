@@ -72,13 +72,15 @@ docker-control build
 docker-control build --no-cache
 ```
 
-#### `console [container]`
-Open a bash shell inside a container. Defaults to the `php` container if no container name is provided. For the `php` container, opens as `www-data` user.
+#### `console [container] [-- command...]`
+Open a bash shell inside a container. Defaults to the `php` container if no container name is provided. For the `php` container, opens as `www-data` user. Everything after a `--` runs as a one-shot command in that container instead of opening a shell, and exits with the command's own status code.
 
 ```bash
 docker-control console
 docker-control console php
 docker-control console db
+docker-control console -- composer install
+docker-control console db -- mysql -e 'show databases'
 ```
 
 #### `create-control-script <name>`
@@ -115,6 +117,16 @@ Merge release branch to main using selective cherry-pick workflow. Excludes rele
 
 ```bash
 docker-control merge
+```
+
+#### `module`
+Check a vendor module out for local development, or start a new one. `module create <vendor/name>` scaffolds a new module (`src/`, `git init` on `main`, interactive `composer init`, PSR-4 autoload) and links it — it also adds the app's `require`, which `link` never does, since nothing requires a brand-new module. `module link <vendor/name>` moves the module's git clone from `htdocs/vendor/` to `htdocs/modules/`, adds a Composer `path` repository pinned to the version already installed, and symlinks it back into `vendor/` — so edits survive `composer install`. `module unlink` restores the normal vendor install, keeping the checkout unless `--purge` is passed. `module list` shows which modules are linked. Requires the containers to be running; Composer runs inside the `php` container.
+
+```bash
+docker-control module list
+docker-control module create acme/widget
+docker-control module link acme/widget
+docker-control module unlink acme/widget
 ```
 
 #### `pull`

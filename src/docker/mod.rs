@@ -3,6 +3,7 @@ use crate::utils::{platform, throttle_cache};
 use anyhow::{Context, Result, anyhow};
 use bollard::Docker;
 use std::hash::{Hash, Hasher};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -325,6 +326,8 @@ pub fn is_running(project_dir: &Path) -> bool {
     }
 }
 
+/// Opens an interactive `bash` shell in `container` (default `php`), or lists the available
+/// services when `container` is `help`. See [`console_exec`] for the one-shot variant.
 pub fn console(project_dir: &Path, container: Option<String>) -> Result<()> {
     let service = container.unwrap_or_else(|| "php".to_string());
 
@@ -373,26 +376,172 @@ pub fn console(project_dir: &Path, container: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn exec_as_root(project_dir: &Path, service: &str, args: &[&str]) -> Result<()> {
+/// The `docker compose exec` flags — everything between `exec` and the service name —
+/// used by [`console_exec`].
+///
+/// `php` is special-cased the same way [`console`] special-cases it: the command runs as
+/// `www-data` in the application mount. `COMPOSER_HOME` has to be passed explicitly for
+/// the same reason [`exec_as_user`] documents — `/var/www/.bashrc` sets it, and only
+/// interactive shells read that file, so the value the interactive [`console`] shell gets
+/// would silently differ from a one-shot `exec`.
+///
+/// A TTY is allocated only when this process has one on both ends (compose allocates one
+/// by default, hence `-T` to opt out): without that check, `dc2 console -- cat foo > out`
+/// would write CRLF line endings into `out`.
+fn console_exec_flags(service: &str, tty: bool) -> Vec<String> {
+    let mut flags: Vec<String> = Vec::new();
+
+    if !tty {
+        flags.push("-T".to_string());
+    }
+
+    if service == "php" {
+        flags.extend(["-u", "www-data"].map(String::from));
+        flags.extend(["-w", "/var/www/html"].map(String::from));
+        flags.extend(["-e", "COMPOSER_HOME=/var/www/.composer"].map(String::from));
+    }
+
+    flags
+}
+
+/// Runs `command` inside `service` instead of opening the interactive [`console`] shell,
+/// and returns the command's own exit code so the caller can propagate it.
+///
+/// `command` is passed as argv, not through a shell, so a pipeline or a redirect has to be
+/// spelled out explicitly (`console -- bash -lc '…'`) rather than being silently
+/// misinterpreted here.
+pub fn console_exec(
+    project_dir: &Path,
+    container: Option<String>,
+    command: &[String],
+) -> Result<i32> {
+    let service = container.unwrap_or_else(|| "php".to_string());
+
+    // `console help` lists the services rather than naming one, so there is nothing to run
+    // a command in. Say so, instead of letting compose fail with "no such service: help".
+    if service == "help" {
+        return Err(anyhow!(
+            "`help` lists the available services rather than naming one — \
+             run `docker-control console help` on its own, or pass a real service name"
+        ));
+    }
+
+    let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+
     let mut cmd = Command::new("docker");
     cmd.arg("compose")
         .arg("--project-directory")
         .arg(project_dir)
         .arg("exec")
-        .arg("-T")
-        .arg("-u")
-        .arg("root")
+        .args(console_exec_flags(&service, tty))
+        .arg(&service)
+        .args(command)
+        .current_dir(project_dir);
+
+    let status = cmd
+        .status()
+        .context("Failed to execute docker compose exec")?;
+
+    // 130 mirrors the shell's convention for a command killed by SIGINT, which is what a
+    // Ctrl-C'd container process reports as a signal rather than an exit code.
+    Ok(status.code().unwrap_or(130))
+}
+
+/// The `docker compose exec` flags shared by [`exec_as_user`], [`exec_as_user_output`] and
+/// [`exec_interactive`] — everything between `exec` and the service name.
+///
+/// `tty` false emits `-T`; compose allocates a pseudo-TTY by default, and every
+/// non-interactive caller here needs it off so output stays pipe-clean.
+fn exec_flags(user: &str, workdir: Option<&str>, env: &[(&str, &str)], tty: bool) -> Vec<String> {
+    let mut flags: Vec<String> = Vec::new();
+    if !tty {
+        flags.push("-T".to_string());
+    }
+    flags.extend(["-u".to_string(), user.to_string()]);
+    if let Some(dir) = workdir {
+        flags.extend(["-w".to_string(), dir.to_string()]);
+    }
+    for (key, value) in env {
+        flags.extend(["-e".to_string(), format!("{}={}", key, value)]);
+    }
+    flags
+}
+
+/// Like [`exec_as_user`], but with a TTY so the command can *prompt* — `composer init` asks
+/// its questions this way. The TTY is allocated only when this process has one on both ends,
+/// so a piped or redirected run still behaves like a plain non-interactive exec.
+///
+/// Returns the command's own exit code instead of an `anyhow::Error`, the pattern
+/// [`console_exec`] established: a program that already explained its own failure
+/// interactively should not also be reported as an `Error:` line by us.
+pub fn exec_interactive(
+    project_dir: &Path,
+    service: &str,
+    user: &str,
+    workdir: Option<&str>,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> Result<i32> {
+    let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+
+    let status = Command::new("docker")
+        .arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("exec")
+        .args(exec_flags(user, workdir, env, tty))
+        .arg(service)
+        .args(args)
+        .current_dir(project_dir)
+        .status()
+        .context(format!("Failed to execute docker compose exec ({})", user))?;
+
+    Ok(status.code().unwrap_or(130))
+}
+
+pub fn exec_as_root(project_dir: &Path, service: &str, args: &[&str]) -> Result<()> {
+    exec_as_user(project_dir, service, "root", None, &[], args)
+}
+
+/// Runs `args` in `service` as `user`, non-interactively, streaming stdout/stderr
+/// to this process and failing on a non-zero exit status.
+///
+/// Unlike [`exec_as_user_output`] the output is inherited rather than captured, so
+/// long-running commands (Composer, in particular) report progress as they go.
+///
+/// `workdir` sets `--workdir` and `env` adds repeated `--env KEY=VALUE` pairs.
+/// Both matter for Composer: the image ships `COMPOSER_HOME=/composer`, and the
+/// override to `/var/www/.composer` — where `config/composer.config.json` is
+/// mounted — lives only in `/var/www/.bashrc`, so it applies to the interactive
+/// [`console`] shell but *not* to a non-interactive `exec`. Without an explicit
+/// `COMPOSER_HOME` the project's private repositories are invisible and the
+/// `volumes/composer-cache` mount is bypassed.
+pub fn exec_as_user(
+    project_dir: &Path,
+    service: &str,
+    user: &str,
+    workdir: Option<&str>,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> Result<()> {
+    let mut cmd = Command::new("docker");
+    cmd.arg("compose")
+        .arg("--project-directory")
+        .arg(project_dir)
+        .arg("exec")
+        .args(exec_flags(user, workdir, env, false))
         .current_dir(project_dir)
         .arg(service)
         .args(args);
 
     let status = cmd
         .status()
-        .context("Failed to execute docker compose exec (root)")?;
+        .context(format!("Failed to execute docker compose exec ({})", user))?;
 
     if !status.success() {
         return Err(anyhow!(
-            "docker compose exec (root) failed with status {}",
+            "docker compose exec ({}) failed with status {}",
+            user,
             status
         ));
     }
@@ -416,9 +565,7 @@ pub fn exec_as_user_output(
         .arg("--project-directory")
         .arg(project_dir)
         .arg("exec")
-        .arg("-T")
-        .arg("-u")
-        .arg(user)
+        .args(exec_flags(user, None, &[], false))
         .current_dir(project_dir)
         .arg(service)
         .args(args)
@@ -475,4 +622,85 @@ fn find_ingress_dir() -> Result<PathBuf> {
     }
 
     Err(anyhow!("Could not find ingress directory"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_exec_flags_match_the_interactive_shell_for_php() {
+        // Same user as `console`, plus the workdir and COMPOSER_HOME that a
+        // non-interactive exec doesn't inherit from /var/www/.bashrc.
+        assert_eq!(
+            console_exec_flags("php", false),
+            vec![
+                "-T",
+                "-u",
+                "www-data",
+                "-w",
+                "/var/www/html",
+                "-e",
+                "COMPOSER_HOME=/var/www/.composer",
+            ]
+        );
+    }
+
+    #[test]
+    fn console_exec_flags_leave_other_services_alone() {
+        // No -u/-w/-e: only the php service is special-cased, matching `console`.
+        assert_eq!(console_exec_flags("db", false), vec!["-T"]);
+    }
+
+    #[test]
+    fn exec_flags_match_the_previous_hand_built_argv() {
+        // Pins what exec_as_user/exec_as_user_output emitted before the builder was factored out.
+        assert_eq!(
+            exec_flags("root", None, &[], false),
+            vec!["-T", "-u", "root"]
+        );
+        assert_eq!(
+            exec_flags(
+                "www-data",
+                Some("/var/www/html"),
+                &[("COMPOSER_HOME", "/var/www/.composer")],
+                false
+            ),
+            vec![
+                "-T",
+                "-u",
+                "www-data",
+                "-w",
+                "/var/www/html",
+                "-e",
+                "COMPOSER_HOME=/var/www/.composer",
+            ]
+        );
+    }
+
+    #[test]
+    fn exec_flags_drop_no_tty_when_a_tty_is_requested() {
+        let flags = exec_flags("www-data", Some("/m"), &[], true);
+        assert!(!flags.contains(&"-T".to_string()));
+        assert_eq!(flags, vec!["-u", "www-data", "-w", "/m"]);
+    }
+
+    #[test]
+    fn console_exec_rejects_the_help_pseudo_service() {
+        // Would otherwise become `docker compose exec help <cmd>`.
+        let err = console_exec(
+            Path::new("."),
+            Some("help".to_string()),
+            &["ls".to_string()],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("console help"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn console_exec_flags_omit_no_tty_when_a_tty_is_available() {
+        assert!(!console_exec_flags("php", true).contains(&"-T".to_string()));
+        assert!(console_exec_flags("db", true).is_empty());
+    }
 }
